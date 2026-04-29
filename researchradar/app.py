@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date as dt_date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -105,15 +105,20 @@ async def sources():
 @app.get("/api/items")
 async def items(
     days: int = 14,
+    item_date: str = Query("", alias="date"),
     q: str = "",
     source_id: str = "",
     source_type: str = "",
     tag: str = "",
     limit: int = 80,
     offset: int = 0,
+    translate_limit: int = 30,
 ):
+    if item_date:
+        validate_item_date(item_date)
     rows, total = db.query_items(
-        days=days,
+        days=max(1, min(days, 3650)),
+        item_date=item_date,
         q=q,
         source_id=source_id,
         source_type=source_type,
@@ -121,9 +126,29 @@ async def items(
         limit=min(limit, 300),
         offset=offset,
     )
-    await ensure_translations(rows, max_count=30)
+    await ensure_translations(rows, max_count=max(0, min(translate_limit, 100)))
     rows = [with_display_summary(row) for row in rows]
     return {"items": rows, "total": total}
+
+
+@app.get("/api/dates")
+async def available_dates(
+    days: int = 365,
+    q: str = "",
+    source_id: str = "",
+    source_type: str = "",
+    tag: str = "",
+    limit: int = 366,
+):
+    rows = db.available_dates(
+        days=max(0, min(days, 3650)),
+        q=q,
+        source_id=source_id,
+        source_type=source_type,
+        tag=tag,
+        limit=max(1, min(limit, 1000)),
+    )
+    return {"dates": rows}
 
 
 @app.get("/api/items/{item_id}")
@@ -131,6 +156,7 @@ async def item_detail(item_id: str):
     item = db.get_item(item_id)
     if not item:
         raise HTTPException(status_code=404, detail="item not found")
+    await ensure_translations([item], max_count=1)
     return with_display_summary(item)
 
 
@@ -222,7 +248,7 @@ async def chat(req: ChatRequest):
     }
     db.add_conversation(conv)
     if req.save_note:
-        title = f"Research note: {(item or {}).get('title', req.question)[:80]}"
+        title = f"研究笔记：{(item or {}).get('title', req.question)[:80]}"
         db.add_note(
             {
                 "id": stable_id(req.user_id, title, conv["id"]),
@@ -249,6 +275,13 @@ def find_profile(user_id: str) -> dict[str, Any] | None:
         if profile.get("user_id") == user_id:
             return profile
     return config.profiles[0] if config.profiles and user_id == "default" else None
+
+
+def validate_item_date(value: str) -> None:
+    try:
+        dt_date.fromisoformat(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="date must use YYYY-MM-DD") from exc
 
 
 def with_display_summary(item: dict[str, Any]) -> dict[str, Any]:

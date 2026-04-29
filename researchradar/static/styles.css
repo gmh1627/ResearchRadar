@@ -19,7 +19,8 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: Inter, "Noto Sans CJK SC", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB",
+    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 button,
@@ -209,6 +210,17 @@ textarea {
 .section-head h2 {
   margin: 0;
   font-size: 22px;
+}
+
+.date-controls {
+  display: grid;
+  grid-template-columns: minmax(190px, 260px);
+  gap: 6px;
+  justify-items: stretch;
+}
+
+.date-controls .muted {
+  text-align: right;
 }
 
 .filters {
@@ -467,6 +479,14 @@ textarea {
 
   .filters {
     grid-template-columns: 1fr;
+  }
+
+  .date-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .date-controls .muted {
+    text-align: left;
   }
 
   .source-row {

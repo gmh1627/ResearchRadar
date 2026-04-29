@@ -4,8 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PID_FILE="$ROOT/data/server.pid"
 
-if command -v tmux >/dev/null 2>&1 && tmux has-session -t researchradar 2>/dev/null; then
-  tmux kill-session -t researchradar
+if command -v tmux >/dev/null 2>&1 && tmux has-session -t =researchradar 2>/dev/null; then
+  tmux kill-session -t =researchradar
   echo "Stopped ResearchRadar tmux session."
   exit 0
 fi

@@ -17,15 +17,16 @@
           </div>
         </div>
 
-        <label class="field-label" for="profileSelect">Profile</label>
+        <label class="field-label" for="profileSelect">研究画像</label>
         <select id="profileSelect"></select>
 
         <nav class="nav">
-          <button class="nav-item active" data-view="digest">Personal Digest</button>
-          <button class="nav-item" data-view="radar">Full Radar</button>
-          <button class="nav-item" data-view="blogs">Blogs & Labs</button>
-          <button class="nav-item" data-view="sources">Sources</button>
-          <button class="nav-item" data-view="notes">Notes</button>
+          <button class="nav-item active" data-view="digest">个性日报</button>
+          <button class="nav-item" data-view="arxiv">每日 arXiv</button>
+          <button class="nav-item" data-view="blogs">博客与实验室</button>
+          <button class="nav-item" data-view="radar">全量雷达</button>
+          <button class="nav-item" data-view="sources">信息源</button>
+          <button class="nav-item" data-view="notes">研究笔记</button>
         </nav>
 
         <div class="ops">
@@ -38,27 +39,27 @@
       <main class="main">
         <section class="topbar">
           <div class="stat">
-            <span class="stat-label">Items</span>
+            <span class="stat-label">条目</span>
             <strong id="itemCount">0</strong>
           </div>
           <div class="stat">
-            <span class="stat-label">Sources</span>
+            <span class="stat-label">来源</span>
             <strong id="sourceCount">0</strong>
           </div>
           <div class="stat wide">
-            <span class="stat-label">Crawler</span>
+            <span class="stat-label">抓取器</span>
             <strong id="crawlerStatus">idle</strong>
           </div>
           <div class="search">
-            <input id="searchInput" placeholder="搜索 title / summary / tag" />
-            <button id="searchBtn">Search</button>
+            <input id="searchInput" placeholder="搜索标题 / 摘要 / 标签" />
+            <button id="searchBtn">搜索</button>
           </div>
         </section>
 
         <section id="view-digest" class="view active">
           <div class="section-head">
             <div>
-              <h2>Personal Digest</h2>
+              <h2>个性日报</h2>
               <p id="digestMeta">按你的研究画像排序</p>
             </div>
             <select id="digestDays">
@@ -71,18 +72,32 @@
           <div id="digestList" class="item-list"></div>
         </section>
 
+        <section id="view-arxiv" class="view">
+          <div class="section-head">
+            <div>
+              <h2>每日 arXiv</h2>
+              <p id="arxivMeta">当天更新的 AI / ML / Agent 论文</p>
+            </div>
+            <div class="date-controls">
+              <select id="arxivDate"></select>
+              <span id="arxivCount" class="muted"></span>
+            </div>
+          </div>
+          <div id="arxivList" class="item-list"></div>
+        </section>
+
         <section id="view-radar" class="view">
           <div class="section-head">
             <div>
-              <h2>Full Radar</h2>
-              <p>Core AI / ML / Agent 全量池</p>
+              <h2>全量雷达</h2>
+              <p>论文、博客、代码和社区讨论的统一池</p>
             </div>
             <div class="filters">
               <select id="typeFilter">
                 <option value="">全部类型</option>
                 <option value="paper">论文</option>
-                <option value="blog">Blog</option>
-                <option value="repo">Repo</option>
+                <option value="blog">博客</option>
+                <option value="repo">代码</option>
                 <option value="discussion">讨论</option>
                 <option value="cn_community">中文源</option>
               </select>
@@ -99,8 +114,12 @@
         <section id="view-blogs" class="view">
           <div class="section-head">
             <div>
-              <h2>Blogs & Labs</h2>
+              <h2>博客与实验室</h2>
               <p>公司与实验室官方动态</p>
+            </div>
+            <div class="date-controls">
+              <select id="blogDate"></select>
+              <span id="blogCount" class="muted"></span>
             </div>
           </div>
           <div id="blogList" class="item-list"></div>
@@ -109,7 +128,7 @@
         <section id="view-sources" class="view">
           <div class="section-head">
             <div>
-              <h2>Sources</h2>
+              <h2>信息源</h2>
               <p>最近一次抓取状态</p>
             </div>
           </div>
@@ -119,7 +138,7 @@
         <section id="view-notes" class="view">
           <div class="section-head">
             <div>
-              <h2>Research Notes</h2>
+              <h2>研究笔记</h2>
               <p>从收藏和问答沉淀的长期笔记</p>
             </div>
           </div>
@@ -141,20 +160,20 @@
           <div id="detailTags" class="tags"></div>
           <div id="detailStatus" class="status-line"></div>
           <div class="detail-actions">
-            <a id="detailLink" target="_blank" rel="noreferrer">Open source</a>
-            <button data-action="like" class="feedback">Like</button>
-            <button data-action="save" class="feedback">Save</button>
-            <button data-action="deep_read" class="feedback">Deep Read</button>
-            <button data-action="ignore" class="feedback ghost">Ignore</button>
+            <a id="detailLink" target="_blank" rel="noreferrer">打开来源</a>
+            <button data-action="like" class="feedback">有用</button>
+            <button data-action="save" class="feedback">收藏</button>
+            <button data-action="deep_read" class="feedback">深读</button>
+            <button data-action="ignore" class="feedback ghost">忽略</button>
           </div>
           <div class="chat">
-            <h3>Research Chat</h3>
+            <h3>研究追问</h3>
             <textarea id="chatQuestion" rows="4" placeholder="例如：这和我的 agent memory / future prediction 方向有什么关系？"></textarea>
             <label class="checkbox">
               <input type="checkbox" id="saveNote" />
-              <span>保存回答为 research note</span>
+              <span>保存回答为研究笔记</span>
             </label>
-            <button id="askBtn">Ask</button>
+            <button id="askBtn">提问</button>
             <div id="chatAnswer" class="answer"></div>
           </div>
         </div>

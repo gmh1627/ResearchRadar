@@ -209,6 +209,7 @@ class Database:
         self,
         *,
         days: int = 14,
+        item_date: str = "",
         q: str = "",
         source_id: str = "",
         source_type: str = "",
@@ -218,18 +219,17 @@ class Database:
     ) -> tuple[list[dict[str, Any]], int]:
         clauses = []
         params: list[Any] = []
-        since = datetime.now(timezone.utc) - timedelta(days=days)
-        clauses.append("(published_at IS NULL OR published_at >= ?)")
-        params.append(since.isoformat())
-        if q:
-            clauses.append("search_text LIKE ?")
-            params.append(f"%{q.lower()}%")
-        if source_id:
-            clauses.append("source_id = ?")
-            params.append(source_id)
-        if source_type:
-            clauses.append("source_type = ?")
-            params.append(source_type)
+        date_expr = "date(COALESCE(published_at, collected_at))"
+        if item_date:
+            clauses.append(f"{date_expr} = ?")
+            params.append(item_date)
+        else:
+            since = datetime.now(timezone.utc) - timedelta(days=days)
+            clauses.append("COALESCE(published_at, collected_at) >= ?")
+            params.append(since.isoformat())
+        append_search_filter(clauses, params, q)
+        append_multi_filter(clauses, params, "source_id", source_id)
+        append_multi_filter(clauses, params, "source_type", source_type)
         if tag:
             clauses.append("tags_json LIKE ?")
             params.append(f"%{tag}%")
@@ -246,6 +246,45 @@ class Database:
                 params + [limit, offset],
             ).fetchall()
         return [decode_item(row) for row in rows], int(total)
+
+    def available_dates(
+        self,
+        *,
+        days: int = 365,
+        q: str = "",
+        source_id: str = "",
+        source_type: str = "",
+        tag: str = "",
+        limit: int = 366,
+    ) -> list[dict[str, Any]]:
+        clauses = []
+        params: list[Any] = []
+        if days > 0:
+            since = datetime.now(timezone.utc) - timedelta(days=days)
+            clauses.append("COALESCE(published_at, collected_at) >= ?")
+            params.append(since.isoformat())
+        append_search_filter(clauses, params, q)
+        append_multi_filter(clauses, params, "source_id", source_id)
+        append_multi_filter(clauses, params, "source_type", source_type)
+        if tag:
+            clauses.append("tags_json LIKE ?")
+            params.append(f"%{tag}%")
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        date_expr = "date(COALESCE(published_at, collected_at))"
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT {date_expr} AS date, COUNT(*) AS count
+                FROM items
+                {where}
+                GROUP BY date
+                HAVING count > 0
+                ORDER BY date DESC
+                LIMIT ?
+                """,
+                params + [limit],
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def get_item(self, item_id: str) -> dict[str, Any] | None:
         with self.connect() as conn:
@@ -375,6 +414,40 @@ def ensure_column(conn: sqlite3.Connection, table: str, column: str, declaration
     if any(row["name"] == column for row in rows):
         return
     conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
+
+
+def split_csv(value: str) -> list[str]:
+    return [part.strip() for part in value.split(",") if part.strip()]
+
+
+def append_multi_filter(clauses: list[str], params: list[Any], column: str, value: str) -> None:
+    values = split_csv(value)
+    if not values:
+        return
+    if len(values) == 1:
+        clauses.append(f"{column} = ?")
+        params.append(values[0])
+        return
+    placeholders = ", ".join("?" for _ in values)
+    clauses.append(f"{column} IN ({placeholders})")
+    params.extend(values)
+
+
+def append_search_filter(clauses: list[str], params: list[Any], q: str) -> None:
+    q = q.strip().lower()
+    if not q:
+        return
+    needle = f"%{q}%"
+    clauses.append(
+        """
+        (
+            search_text LIKE ?
+            OR lower(COALESCE(summary_zh, '')) LIKE ?
+            OR lower(COALESCE(title, '')) LIKE ?
+        )
+        """
+    )
+    params.extend([needle, needle, needle])
 
 
 def decode_item(row: sqlite3.Row) -> dict[str, Any]:

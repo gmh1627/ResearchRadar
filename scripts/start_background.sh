@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 mkdir -p "$ROOT/logs" "$ROOT/data"
 
 if command -v tmux >/dev/null 2>&1; then
-  if tmux has-session -t researchradar 2>/dev/null; then
+  if tmux has-session -t =researchradar 2>/dev/null; then
     echo "ResearchRadar tmux session already running."
     "$ROOT/scripts/print_url.sh"
     exit 0
