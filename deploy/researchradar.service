@@ -1,0 +1,19 @@
+[Unit]
+Description=ResearchRadar local AI research source agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=batchcom
+Group=batchcom
+WorkingDirectory=/home/dataset-local/ResearchRadar
+Environment=PIP_CACHE_DIR=/home/dataset-local/.cache/pip
+Environment=HOME=/home/batchcom
+EnvironmentFile=-/home/dataset-local/ResearchRadar/.env
+ExecStart=/home/dataset-local/ResearchRadar/.venv/bin/python -m uvicorn researchradar.app:app --host 0.0.0.0 --port 8765
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

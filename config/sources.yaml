@@ -1,0 +1,197 @@
+sources:
+  - id: "arxiv_core"
+    name: "arXiv Core AI / ML / Agent"
+    type: "arxiv"
+    enabled: true
+    source_type: "paper"
+    reliability: "high"
+    evidence_role: "primary_research"
+    categories:
+      - "cs.AI"
+      - "cs.LG"
+      - "stat.ML"
+      - "cs.CL"
+      - "cs.MA"
+    conditional_categories:
+      - "cs.IR"
+      - "cs.NE"
+    conditional_keywords:
+      - "LLM"
+      - "large language model"
+      - "agent"
+      - "RAG"
+      - "retrieval augmented generation"
+      - "reasoning"
+      - "tool use"
+      - "multi-agent"
+      - "self-improvement"
+      - "open-ended learning"
+
+  - id: "openai_blog"
+    name: "OpenAI Blog"
+    type: "rss"
+    url: "https://openai.com/news/rss.xml"
+    homepage: "https://openai.com/news/"
+    enabled: true
+    source_type: "blog"
+    reliability: "high"
+    evidence_role: "official_update"
+
+  - id: "anthropic_news"
+    name: "Anthropic News"
+    type: "page"
+    url: "https://www.anthropic.com/news"
+    enabled: true
+    source_type: "blog"
+    reliability: "high"
+    evidence_role: "official_update"
+
+  - id: "deepmind_blog"
+    name: "Google DeepMind Blog"
+    type: "page"
+    url: "https://deepmind.google/discover/blog/"
+    enabled: true
+    source_type: "blog"
+    reliability: "high"
+    evidence_role: "official_update"
+
+  - id: "meta_ai_blog"
+    name: "Meta AI Blog"
+    type: "page"
+    url: "https://ai.meta.com/blog/"
+    enabled: true
+    source_type: "blog"
+    reliability: "high"
+    evidence_role: "official_update"
+
+  - id: "microsoft_research_blog"
+    name: "Microsoft Research Blog"
+    type: "rss"
+    url: "https://www.microsoft.com/en-us/research/feed/"
+    fallback_url: "https://www.microsoft.com/en-us/research/blog/"
+    enabled: true
+    source_type: "blog"
+    reliability: "high"
+    evidence_role: "official_update"
+
+  - id: "google_research_blog"
+    name: "Google Research Blog"
+    type: "rss"
+    url: "https://research.google/blog/rss/"
+    homepage: "https://research.google/blog/"
+    enabled: true
+    source_type: "blog"
+    reliability: "high"
+    evidence_role: "official_update"
+
+  - id: "nvidia_research_blog"
+    name: "NVIDIA Research / Developer Blog"
+    type: "rss"
+    url: "https://developer.nvidia.com/blog/category/deep-learning/feed/"
+    fallback_url: "https://research.nvidia.com/news"
+    enabled: true
+    source_type: "blog"
+    reliability: "high"
+    evidence_role: "official_update"
+
+  - id: "huggingface_blog"
+    name: "Hugging Face Blog"
+    type: "rss"
+    url: "https://huggingface.co/blog/feed.xml"
+    homepage: "https://huggingface.co/blog"
+    enabled: true
+    source_type: "blog"
+    reliability: "high"
+    evidence_role: "official_update"
+
+  - id: "allenai_blog"
+    name: "Allen AI Blog"
+    type: "page"
+    url: "https://allenai.org/blog"
+    enabled: true
+    source_type: "blog"
+    reliability: "high"
+    evidence_role: "lab_update"
+
+  - id: "stanford_crfm"
+    name: "Stanford CRFM"
+    type: "page"
+    url: "https://crfm.stanford.edu/"
+    enabled: true
+    source_type: "blog"
+    reliability: "high"
+    evidence_role: "lab_update"
+
+  - id: "berkeley_bair_blog"
+    name: "Berkeley AI Research Blog"
+    type: "rss"
+    url: "https://bair.berkeley.edu/blog/feed.xml"
+    homepage: "https://bair.berkeley.edu/blog/"
+    enabled: true
+    source_type: "blog"
+    reliability: "high"
+    evidence_role: "lab_update"
+
+  - id: "baai_news"
+    name: "智源研究院"
+    type: "page"
+    url: "https://www.baai.ac.cn/"
+    enabled: true
+    source_type: "cn_community"
+    reliability: "medium"
+    evidence_role: "cn_research_update"
+
+  - id: "shanghai_ai_lab"
+    name: "上海 AI Lab"
+    type: "page"
+    url: "https://www.shlab.org.cn/"
+    enabled: true
+    source_type: "cn_community"
+    reliability: "medium"
+    evidence_role: "cn_research_update"
+
+  - id: "deepseek_news"
+    name: "DeepSeek"
+    type: "page"
+    url: "https://www.deepseek.com/"
+    enabled: true
+    source_type: "blog"
+    reliability: "high"
+    evidence_role: "official_update"
+
+  - id: "qwen_blog"
+    name: "Qwen Blog"
+    type: "rss"
+    url: "https://qwenlm.github.io/blog/index.xml"
+    fallback_url: "https://qwenlm.github.io/blog/"
+    enabled: true
+    source_type: "blog"
+    reliability: "high"
+    evidence_role: "official_update"
+
+  - id: "moonshot_ai"
+    name: "月之暗面 Moonshot AI"
+    type: "page"
+    url: "https://www.moonshot.cn/"
+    enabled: true
+    source_type: "blog"
+    reliability: "medium"
+    evidence_role: "official_update"
+
+  - id: "tsinghua_ai"
+    name: "清华 AI"
+    type: "page"
+    url: "https://air.tsinghua.edu.cn/"
+    enabled: true
+    source_type: "cn_community"
+    reliability: "medium"
+    evidence_role: "cn_research_update"
+
+  - id: "pku_ai"
+    name: "北大 AI"
+    type: "page"
+    url: "https://www.ai.pku.edu.cn/"
+    enabled: true
+    source_type: "cn_community"
+    reliability: "medium"
+    evidence_role: "cn_research_update"

@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ResearchRadar</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">RR</div>
+          <div>
+            <h1>ResearchRadar</h1>
+            <p id="serverLine">连接中</p>
+          </div>
+        </div>
+
+        <label class="field-label" for="profileSelect">Profile</label>
+        <select id="profileSelect"></select>
+
+        <nav class="nav">
+          <button class="nav-item active" data-view="digest">Personal Digest</button>
+          <button class="nav-item" data-view="radar">Full Radar</button>
+          <button class="nav-item" data-view="blogs">Blogs & Labs</button>
+          <button class="nav-item" data-view="sources">Sources</button>
+          <button class="nav-item" data-view="notes">Notes</button>
+        </nav>
+
+        <div class="ops">
+          <button id="crawl1">抓取今天</button>
+          <button id="crawl14">回填 14 天</button>
+          <button id="crawl30">回填 30 天</button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <section class="topbar">
+          <div class="stat">
+            <span class="stat-label">Items</span>
+            <strong id="itemCount">0</strong>
+          </div>
+          <div class="stat">
+            <span class="stat-label">Sources</span>
+            <strong id="sourceCount">0</strong>
+          </div>
+          <div class="stat wide">
+            <span class="stat-label">Crawler</span>
+            <strong id="crawlerStatus">idle</strong>
+          </div>
+          <div class="search">
+            <input id="searchInput" placeholder="搜索 title / summary / tag" />
+            <button id="searchBtn">Search</button>
+          </div>
+        </section>
+
+        <section id="view-digest" class="view active">
+          <div class="section-head">
+            <div>
+              <h2>Personal Digest</h2>
+              <p id="digestMeta">按你的研究画像排序</p>
+            </div>
+            <select id="digestDays">
+              <option value="3">近 3 天</option>
+              <option value="7" selected>近 7 天</option>
+              <option value="14">近 14 天</option>
+              <option value="30">近 30 天</option>
+            </select>
+          </div>
+          <div id="digestList" class="item-list"></div>
+        </section>
+
+        <section id="view-radar" class="view">
+          <div class="section-head">
+            <div>
+              <h2>Full Radar</h2>
+              <p>Core AI / ML / Agent 全量池</p>
+            </div>
+            <div class="filters">
+              <select id="typeFilter">
+                <option value="">全部类型</option>
+                <option value="paper">论文</option>
+                <option value="blog">Blog</option>
+                <option value="repo">Repo</option>
+                <option value="discussion">讨论</option>
+                <option value="cn_community">中文源</option>
+              </select>
+              <select id="daysFilter">
+                <option value="7">近 7 天</option>
+                <option value="14" selected>近 14 天</option>
+                <option value="30">近 30 天</option>
+              </select>
+            </div>
+          </div>
+          <div id="radarList" class="item-list"></div>
+        </section>
+
+        <section id="view-blogs" class="view">
+          <div class="section-head">
+            <div>
+              <h2>Blogs & Labs</h2>
+              <p>公司与实验室官方动态</p>
+            </div>
+          </div>
+          <div id="blogList" class="item-list"></div>
+        </section>
+
+        <section id="view-sources" class="view">
+          <div class="section-head">
+            <div>
+              <h2>Sources</h2>
+              <p>最近一次抓取状态</p>
+            </div>
+          </div>
+          <div id="sourceTable" class="source-table"></div>
+        </section>
+
+        <section id="view-notes" class="view">
+          <div class="section-head">
+            <div>
+              <h2>Research Notes</h2>
+              <p>从收藏和问答沉淀的长期笔记</p>
+            </div>
+          </div>
+          <div id="notesList" class="notes"></div>
+        </section>
+      </main>
+
+      <aside class="detail">
+        <div id="detailEmpty" class="empty-state">
+          选择一条内容后查看证据卡片和追问。
+        </div>
+        <div id="detailPanel" class="detail-panel hidden">
+          <div class="detail-top">
+            <span id="detailType" class="pill"></span>
+            <span id="detailSource" class="muted"></span>
+          </div>
+          <h2 id="detailTitle"></h2>
+          <p id="detailSummary"></p>
+          <div id="detailTags" class="tags"></div>
+          <div class="detail-actions">
+            <a id="detailLink" target="_blank" rel="noreferrer">Open source</a>
+            <button data-action="like" class="feedback">Like</button>
+            <button data-action="save" class="feedback">Save</button>
+            <button data-action="deep_read" class="feedback">Deep Read</button>
+            <button data-action="ignore" class="feedback ghost">Ignore</button>
+          </div>
+          <div class="chat">
+            <h3>Research Chat</h3>
+            <textarea id="chatQuestion" rows="4" placeholder="例如：这和我的 agent memory / future prediction 方向有什么关系？"></textarea>
+            <label class="checkbox">
+              <input type="checkbox" id="saveNote" />
+              <span>保存回答为 research note</span>
+            </label>
+            <button id="askBtn">Ask</button>
+            <div id="chatAnswer" class="answer"></div>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

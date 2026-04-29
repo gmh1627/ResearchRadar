@@ -1,0 +1,43 @@
+profiles:
+  - user_id: "default"
+    display_name: "AI PhD Researcher"
+    role: "PhD student"
+    major: "Artificial Intelligence"
+    primary_topics:
+      - "large language models"
+      - "AI agents"
+      - "agent systems"
+      - "tool use"
+      - "agent memory"
+      - "LLM reasoning"
+      - "future prediction"
+      - "code agents"
+    secondary_topics:
+      - "RAG"
+      - "evaluation"
+      - "alignment"
+      - "open-source LLMs"
+      - "AI infrastructure"
+      - "RL for LLM"
+      - "long context"
+      - "data synthesis"
+    negative_topics:
+      - "pure computer vision"
+      - "hardware only"
+      - "networking only"
+      - "marketing automation"
+      - "real estate agent"
+    preferred_sources:
+      - "arxiv_core"
+      - "openai_blog"
+      - "anthropic_news"
+      - "deepmind_blog"
+      - "meta_ai_blog"
+      - "google_research_blog"
+      - "huggingface_blog"
+      - "github"
+      - "hackernews"
+    digest_language: "zh-CN"
+    technical_depth: "high"
+    include_code_links: true
+    include_action_suggestions: true

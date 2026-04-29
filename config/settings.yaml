@@ -1,0 +1,59 @@
+server:
+  host: "0.0.0.0"
+  port: 8765
+
+crawl:
+  timezone: "Asia/Shanghai"
+  daily_time: "07:30"
+  initial_backfill_days: 14
+  request_timeout_seconds: 25
+  max_items_per_source: 80
+  arxiv_page_size: 200
+  arxiv_max_results_per_run: 1500
+  user_agent: "ResearchRadar/0.1 (+local personal research agent)"
+
+ranking:
+  digest_item_count: 12
+  full_radar_days_default: 14
+
+github:
+  enabled: true
+  keywords:
+    - "large language model agent"
+    - "LLM reasoning"
+    - "RAG agent"
+    - "code agent"
+    - "agent memory"
+    - "LLM evaluation"
+
+hackernews:
+  enabled: true
+  keywords:
+    - "LLM"
+    - "agent"
+    - "AI"
+    - "machine learning"
+    - "OpenAI"
+    - "Anthropic"
+    - "DeepSeek"
+    - "Qwen"
+
+llm:
+  provider: "openrouter_compat"
+  model_env: "OPENROUTER_MODEL"
+  api_key_env: "OPENROUTER_API_KEY"
+  base_url_env: "OPENROUTER_BASE_URL"
+  fallback_api_key_env: "OPENAI_API_KEY"
+  fallback_base_url_env: "OPENAI_BASE_URL"
+  default_base_url: "https://openrouter.ai/api/v1"
+  default_model: "openai/gpt-4o-mini"
+
+jina:
+  api_key_env: "JINA_API_KEY"
+  reader_url: "https://r.jina.ai/http://"
+  max_chars: 5000
+
+serper:
+  api_key_env: "SERPER_API_KEY"
+  search_url: "https://google.serper.dev/search"
+  default_results: 8
