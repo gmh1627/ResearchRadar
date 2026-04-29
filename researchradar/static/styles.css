@@ -426,6 +426,15 @@ textarea {
   padding: 12px;
 }
 
+.source-row {
+  color: inherit;
+  text-decoration: none;
+}
+
+.source-row:hover {
+  border-color: var(--accent);
+}
+
 .note {
   display: block;
 }

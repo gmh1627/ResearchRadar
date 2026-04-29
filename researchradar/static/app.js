@@ -76,6 +76,13 @@ function crawlerLabel(crawler) {
   return message || "运行中";
 }
 
+function sourceUrl(source) {
+  if (source.homepage) return source.homepage;
+  if (source.fallback_url) return source.fallback_url;
+  if (source.type !== "rss" && source.url) return source.url;
+  return source.url || "";
+}
+
 function escapeHtml(value) {
   return String(value || "")
     .replaceAll("&", "&amp;")
@@ -255,13 +262,19 @@ async function loadSources() {
       const date = latest ? latest.target_date : "-";
       const count = latest ? latest.items_found : 0;
       const error = latest && latest.error ? latest.error : "";
+      const url = sourceUrl(source);
+      const tag = url ? "a" : "div";
+      const attrs = url ? ` href="${escapeHtml(url)}" target="_blank" rel="noreferrer"` : "";
       return `
-        <div class="source-row">
-          <div><strong>${escapeHtml(source.name || source.id)}</strong><div class="muted">${escapeHtml(source.id)}</div></div>
+        <${tag} class="source-row"${attrs}>
+          <div>
+            <strong>${escapeHtml(source.name || source.id)}</strong>
+            <div class="muted">${escapeHtml(source.id)}</div>
+          </div>
           <span class="pill">${escapeHtml(STATUS_LABELS[status] || status)}</span>
           <span class="muted">${escapeHtml(date)} · ${count} 条</span>
-          <span class="muted">${escapeHtml(truncate(error, 180))}</span>
-        </div>
+          <span class="muted">${escapeHtml(error ? truncate(error, 180) : "点击访问来源")}</span>
+        </${tag}>
       `;
     })
     .join("");

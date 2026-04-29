@@ -93,8 +93,20 @@ async def stats():
 @app.get("/api/sources")
 async def sources():
     configured = {source["id"]: source for source in config.sources}
-    configured["github"] = {"id": "github", "name": "GitHub", "type": "api", "enabled": True}
-    configured["hackernews"] = {"id": "hackernews", "name": "Hacker News", "type": "api", "enabled": True}
+    configured["github"] = {
+        "id": "github",
+        "name": "GitHub",
+        "type": "api",
+        "homepage": "https://github.com/search?q=LLM+agent&type=repositories&s=updated&o=desc",
+        "enabled": True,
+    }
+    configured["hackernews"] = {
+        "id": "hackernews",
+        "name": "Hacker News",
+        "type": "api",
+        "homepage": "https://hn.algolia.com/?q=LLM%20agent",
+        "enabled": True,
+    }
     latest = {row["source_id"]: row for row in db.source_status()}
     rows = []
     for source_id, source in configured.items():

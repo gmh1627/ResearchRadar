@@ -2,6 +2,7 @@ sources:
   - id: "arxiv_core"
     name: "arXiv Core AI / ML / Agent"
     type: "arxiv"
+    homepage: "https://arxiv.org/list/cs.AI/recent"
     enabled: true
     source_type: "paper"
     reliability: "high"
