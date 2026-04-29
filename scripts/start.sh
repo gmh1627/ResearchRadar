@@ -15,4 +15,5 @@ HOST="${RESEARCHRADAR_HOST:-0.0.0.0}"
 PORT="${RESEARCHRADAR_PORT:-8765}"
 
 cd "$ROOT"
+"$ROOT/scripts/print_url.sh"
 exec "$ROOT/.venv/bin/python" -m uvicorn researchradar.app:app --host "$HOST" --port "$PORT"

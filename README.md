@@ -7,6 +7,7 @@ ResearchRadar is a local browser-based personal AI research source agent. It cra
 ```bash
 cd /home/dataset-local/ResearchRadar
 scripts/setup_venv.sh
+# If .env already exists, keep it. Otherwise:
 cp .env.example .env
 scripts/start_background.sh
 ```
@@ -15,6 +16,18 @@ Open:
 
 ```text
 http://<server-local-ip>:8765
+```
+
+The startup command prints the exact URLs. If the server's private IP is not reachable from your browser, use SSH port forwarding:
+
+```bash
+ssh -L 8765:127.0.0.1:8765 <user>@<server>
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8765
 ```
 
 On this machine you can check the local IP with:

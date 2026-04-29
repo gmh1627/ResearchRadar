@@ -7,10 +7,12 @@ mkdir -p "$ROOT/logs" "$ROOT/data"
 if command -v tmux >/dev/null 2>&1; then
   if tmux has-session -t researchradar 2>/dev/null; then
     echo "ResearchRadar tmux session already running."
+    "$ROOT/scripts/print_url.sh"
     exit 0
   fi
   tmux new-session -d -s researchradar "cd '$ROOT' && '$ROOT/scripts/start.sh' >> '$ROOT/logs/server.log' 2>&1"
   echo "ResearchRadar started in tmux session: researchradar"
+  "$ROOT/scripts/print_url.sh"
   exit 0
 fi
 
@@ -26,3 +28,4 @@ nohup "$ROOT/scripts/start.sh" > "$ROOT/logs/server.log" 2>&1 &
 PID="$!"
 echo "$PID" > "$ROOT/data/server.pid"
 echo "ResearchRadar started with PID $PID"
+"$ROOT/scripts/print_url.sh"
