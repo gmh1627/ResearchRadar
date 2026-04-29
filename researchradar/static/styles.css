@@ -327,6 +327,13 @@ textarea {
   margin: 16px 0 20px;
 }
 
+.status-line {
+  min-height: 22px;
+  margin-top: 12px;
+  color: var(--accent-strong);
+  font-size: 13px;
+}
+
 .detail-actions a {
   display: inline-flex;
   align-items: center;

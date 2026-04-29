@@ -59,6 +59,7 @@ function renderItem(item, mode = "radar") {
   const reason = item.relevance_reason ? `<p><strong>Why:</strong> ${escapeHtml(item.relevance_reason)}</p>` : "";
   const action = item.recommended_action ? `<p><strong>Action:</strong> ${escapeHtml(item.recommended_action)}</p>` : "";
   const tags = (item.tags || []).slice(0, 6).map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("");
+  const summary = item.display_summary || item.summary || "暂无中文摘要。";
   return `
     <article class="item-card${selected}" data-id="${item.id}">
       <div class="item-meta">
@@ -68,7 +69,7 @@ function renderItem(item, mode = "radar") {
         ${score}
       </div>
       <h3>${escapeHtml(item.title)}</h3>
-      <p>${escapeHtml(truncate(item.summary || "No summary available.", mode === "digest" ? 260 : 320))}</p>
+      <p>${escapeHtml(truncate(summary, mode === "digest" ? 260 : 320))}</p>
       ${reason}
       ${action}
       <div class="tags">${tags}</div>
@@ -93,10 +94,11 @@ function selectItem(item) {
   $("detailType").className = `pill ${pillClass(item.source_type)}`;
   $("detailSource").textContent = `${item.source_name} · ${formatDate(item.published_at || item.collected_at)}`;
   $("detailTitle").textContent = item.title;
-  $("detailSummary").textContent = item.summary || "该条目没有摘要，建议打开原始来源。";
+  $("detailSummary").textContent = item.display_summary || item.summary_zh || item.summary || "该条目没有摘要，建议打开原始来源。";
   $("detailLink").href = item.url;
   $("detailTags").innerHTML = (item.tags || []).map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("");
   $("chatAnswer").textContent = "";
+  $("detailStatus").textContent = "";
   document.querySelectorAll(".item-card").forEach((card) => {
     card.classList.toggle("selected", card.dataset.id === item.id);
   });
@@ -212,10 +214,19 @@ async function triggerCrawl(days) {
 
 async function sendFeedback(action) {
   if (!state.selectedItem) return;
+  $("detailStatus").textContent = "正在保存反馈...";
   await api(`/api/items/${state.selectedItem.id}/feedback`, {
     method: "POST",
     body: JSON.stringify({ user_id: state.profile, action }),
   });
+  const labels = {
+    like: "已标记为有用",
+    save: "已收藏",
+    deep_read: "已加入深读",
+    ignore: "已忽略",
+    not_relevant: "已标记为不相关",
+  };
+  $("detailStatus").textContent = labels[action] || "反馈已保存";
   await refreshView();
 }
 

@@ -83,6 +83,7 @@ class CrawlManager:
             total += result
         status = "success" if not errors else "partial"
         self.db.mark_day_finished(target, status, total, "\n".join(errors) if errors else None)
+        await asyncio.to_thread(self.translate_recent_summaries)
         return total
 
     async def run_config_source(self, source: dict, target: date) -> int:
@@ -114,6 +115,14 @@ class CrawlManager:
             await asyncio.sleep(seconds_until_next_run(self.config.timezone, self.config.daily_time))
             target = datetime.now(ZoneInfo(self.config.timezone)).date() - timedelta(days=1)
             await self.crawl_dates([target])
+
+    def translate_recent_summaries(self) -> None:
+        try:
+            from .translation import translate_missing
+
+            translate_missing(limit=300)
+        except Exception:
+            pass
 
 
 def seconds_until_next_run(tz_name: str, hhmm: str) -> float:

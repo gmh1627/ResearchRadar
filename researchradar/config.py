@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,20 @@ LOG_DIR = ROOT / "logs"
 def load_yaml(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as fh:
         return yaml.safe_load(fh) or {}
+
+
+def load_env_file(path: Path = ROOT / ".env") -> None:
+    if not path.exists():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
 
 
 @dataclass(frozen=True)
@@ -62,6 +77,7 @@ class AppConfig:
 
 
 def load_config() -> AppConfig:
+    load_env_file()
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     settings = load_yaml(CONFIG_DIR / "settings.yaml")

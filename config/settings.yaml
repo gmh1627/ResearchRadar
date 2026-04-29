@@ -46,7 +46,7 @@ llm:
   fallback_api_key_env: "OPENAI_API_KEY"
   fallback_base_url_env: "OPENAI_BASE_URL"
   default_base_url: "https://openrouter.ai/api/v1"
-  default_model: "openai/gpt-4o-mini"
+  default_model: "gpt-5.4"
 
 jina:
   api_key_env: "JINA_API_KEY"

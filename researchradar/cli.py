@@ -22,6 +22,10 @@ def parse_args() -> argparse.Namespace:
 
     sub.add_parser("catch-up")
     sub.add_parser("stats")
+
+    translate = sub.add_parser("translate-missing")
+    translate.add_argument("--limit", type=int, default=500)
+    translate.add_argument("--batch-size", type=int, default=32)
     return parser.parse_args()
 
 
@@ -38,6 +42,13 @@ def main() -> None:
 
     if args.command == "stats":
         print(db.stats())
+        return
+
+    if args.command == "translate-missing":
+        from .translation import translate_missing
+
+        count = translate_missing(limit=max(args.limit, 1), batch_size=max(args.batch_size, 1))
+        print(f"Translated {count} item summaries.")
         return
 
     if args.command == "catch-up":

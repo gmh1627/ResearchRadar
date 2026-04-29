@@ -17,6 +17,7 @@ from .db import Database, encode_json
 from .llm import answer_question, serper_search
 from .ranker import rank_items
 from .textutils import stable_id
+from .translation import SummaryTranslator
 
 
 config = load_config()
@@ -120,6 +121,8 @@ async def items(
         limit=min(limit, 300),
         offset=offset,
     )
+    await ensure_translations(rows, max_count=30)
+    rows = [with_display_summary(row) for row in rows]
     return {"items": rows, "total": total}
 
 
@@ -128,7 +131,7 @@ async def item_detail(item_id: str):
     item = db.get_item(item_id)
     if not item:
         raise HTTPException(status_code=404, detail="item not found")
-    return item
+    return with_display_summary(item)
 
 
 @app.get("/api/digest")
@@ -138,6 +141,8 @@ async def digest(user_id: str = "default", days: int = 7, limit: int | None = No
         raise HTTPException(status_code=404, detail="profile not found")
     rows, _ = db.query_items(days=days, limit=400)
     ranked = rank_items(rows, profile, db.feedback_for_user(user_id))
+    await ensure_translations(ranked[: (limit or config.digest_item_count)], max_count=30)
+    ranked = [with_display_summary(row) for row in ranked]
     return {
         "profile": profile,
         "items": ranked[: (limit or config.digest_item_count)],
@@ -192,13 +197,20 @@ async def chat(req: ChatRequest):
         raise HTTPException(status_code=404, detail="profile not found")
     item = db.get_item(req.item_id) if req.item_id else None
     related, _ = db.query_items(days=21, q=" ".join((item or {}).get("tags", [])[:2]), limit=8)
-    answer = await answer_question(
-        settings=config.settings,
-        profile=profile,
-        item=item,
-        question=req.question,
-        related_items=related,
-    )
+    try:
+        answer = await answer_question(
+            settings=config.settings,
+            profile=profile,
+            item=item,
+            question=req.question,
+            related_items=related,
+        )
+    except Exception as exc:
+        answer = (
+            "大模型接口暂时不可用，但页面不会再中断。\n\n"
+            f"错误类型：{type(exc).__name__}\n"
+            "你可以稍后重试，或者先打开原文查看。"
+        )
     conv = {
         "id": stable_id(req.user_id, req.item_id or "", req.question, datetime.now(timezone.utc).isoformat()),
         "user_id": req.user_id,
@@ -237,3 +249,30 @@ def find_profile(user_id: str) -> dict[str, Any] | None:
         if profile.get("user_id") == user_id:
             return profile
     return config.profiles[0] if config.profiles and user_id == "default" else None
+
+
+def with_display_summary(item: dict[str, Any]) -> dict[str, Any]:
+    summary_zh = (item.get("summary_zh") or "").strip()
+    if not summary_zh:
+        if item.get("summary"):
+            summary_zh = "中文摘要生成中，请稍后刷新。"
+        else:
+            summary_zh = "暂无来源摘要，建议打开原文查看细节。"
+    return {**item, "display_summary": summary_zh}
+
+
+async def ensure_translations(rows: list[dict[str, Any]], max_count: int = 30) -> None:
+    missing = [row for row in rows if not (row.get("summary_zh") or "").strip()][:max_count]
+    if not missing:
+        return
+
+    def translate_and_update() -> None:
+        translator = SummaryTranslator(config.settings)
+        for start in range(0, len(missing), 8):
+            batch = missing[start : start + 8]
+            summaries = translator.translate_rows(batch)
+            for row, zh in zip(batch, summaries):
+                row["summary_zh"] = zh
+                db.update_summary_zh(row["id"], zh)
+
+    await asyncio.to_thread(translate_and_update)

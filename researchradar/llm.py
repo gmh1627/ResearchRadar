@@ -41,15 +41,25 @@ async def answer_question(
             "content": f"用户问题：{question}\n\n上下文：\n{context}",
         },
     ]
-    async with httpx.AsyncClient(timeout=45) as client:
-        response = await client.post(
-            f"{base_url}/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={"model": model, "messages": messages, "temperature": 0.2},
-        )
-        response.raise_for_status()
-        payload = response.json()
-    return payload["choices"][0]["message"]["content"].strip()
+    models = unique_models([model, "gpt-5.4", "openai/gpt-4o-mini", "gpt-4o-mini"])
+    errors: list[str] = []
+    async with httpx.AsyncClient(timeout=90) as client:
+        for candidate in models:
+            try:
+                response = await client.post(
+                    f"{base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json={"model": candidate, "messages": messages, "temperature": 0.2},
+                )
+                response.raise_for_status()
+                payload = response.json()
+                content = payload["choices"][0]["message"]["content"].strip()
+                if content:
+                    return content
+            except Exception as exc:
+                errors.append(f"{candidate}: {type(exc).__name__}")
+    fallback = fallback_answer(profile=profile, item=item, question=question, related_items=related_items)
+    return fallback + "\n\n大模型接口刚才不可用，已自动降级为本地回答。最近的调用错误：" + "；".join(errors[:3])
 
 
 async def fetch_jina_text(settings: dict[str, Any], url: str | None) -> str:
@@ -156,3 +166,14 @@ def fallback_answer(
 {related}
 
 配置 `OPENROUTER_API_KEY`、`OPENROUTER_BASE_URL` 和 `OPENROUTER_MODEL` 后，这里会切换为完整的 source-grounded 大模型回答。"""
+
+
+def unique_models(models: list[str]) -> list[str]:
+    seen = set()
+    out = []
+    for model in models:
+        model = (model or "").strip()
+        if model and model not in seen:
+            seen.add(model)
+            out.append(model)
+    return out

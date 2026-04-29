@@ -37,6 +37,7 @@ class Database:
                     title TEXT NOT NULL,
                     url TEXT NOT NULL,
                     summary TEXT,
+                    summary_zh TEXT,
                     authors_json TEXT NOT NULL DEFAULT '[]',
                     categories_json TEXT NOT NULL DEFAULT '[]',
                     tags_json TEXT NOT NULL DEFAULT '[]',
@@ -109,6 +110,7 @@ class Database:
                 );
                 """
             )
+            ensure_column(conn, "items", "summary_zh", "TEXT")
 
     def upsert_items(self, items: Iterable[dict[str, Any]]) -> int:
         rows = list(items)
@@ -119,13 +121,13 @@ class Database:
             conn.executemany(
                 """
                 INSERT INTO items (
-                    id, source_id, source_name, source_type, title, url, summary,
+                    id, source_id, source_name, source_type, title, url, summary, summary_zh,
                     authors_json, categories_json, tags_json, published_at,
                     collected_at, source_reliability, evidence_role, metadata_json,
                     search_text
                 )
                 VALUES (
-                    :id, :source_id, :source_name, :source_type, :title, :url, :summary,
+                    :id, :source_id, :source_name, :source_type, :title, :url, :summary, :summary_zh,
                     :authors_json, :categories_json, :tags_json, :published_at,
                     :collected_at, :source_reliability, :evidence_role, :metadata_json,
                     :search_text
@@ -133,6 +135,7 @@ class Database:
                 ON CONFLICT(id) DO UPDATE SET
                     title=excluded.title,
                     summary=COALESCE(NULLIF(excluded.summary, ''), items.summary),
+                    summary_zh=COALESCE(NULLIF(items.summary_zh, ''), excluded.summary_zh),
                     tags_json=excluded.tags_json,
                     categories_json=excluded.categories_json,
                     metadata_json=excluded.metadata_json,
@@ -267,6 +270,24 @@ class Database:
                 (user_id, item_id, action, note, datetime.now(timezone.utc).isoformat()),
             )
 
+    def items_missing_translation(self, limit: int = 200) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, title, summary, source_type, source_name
+                FROM items
+                WHERE (summary_zh IS NULL OR summary_zh = '')
+                ORDER BY (summary IS NULL OR summary = '') ASC, COALESCE(published_at, collected_at) DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def update_summary_zh(self, item_id: str, summary_zh: str) -> None:
+        with self.connect() as conn:
+            conn.execute("UPDATE items SET summary_zh=? WHERE id=?", (summary_zh, item_id))
+
     def add_note(self, note: dict[str, Any]) -> None:
         with self.connect() as conn:
             conn.execute(
@@ -347,6 +368,13 @@ class Database:
 
 def encode_json(value: Any) -> str:
     return json.dumps(value if value is not None else [], ensure_ascii=False)
+
+
+def ensure_column(conn: sqlite3.Connection, table: str, column: str, declaration: str) -> None:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    if any(row["name"] == column for row in rows):
+        return
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
 
 
 def decode_item(row: sqlite3.Row) -> dict[str, Any]:

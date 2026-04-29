@@ -359,6 +359,7 @@ class Collector:
             "title": title,
             "url": url,
             "summary": summary,
+            "summary_zh": "",
             "authors_json": encode_json([a for a in authors if a]),
             "categories_json": encode_json([c for c in categories if c]),
             "tags_json": encode_json(tags),
