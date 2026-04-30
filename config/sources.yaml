@@ -84,10 +84,9 @@ sources:
     evidence_role: "official_update"
 
   - id: "nvidia_research_blog"
-    name: "NVIDIA Research / Developer Blog"
-    type: "rss"
-    url: "https://developer.nvidia.com/blog/category/deep-learning/feed/"
-    fallback_url: "https://research.nvidia.com/news"
+    name: "NVIDIA Blog"
+    type: "page"
+    url: "https://blogs.nvidia.com/"
     enabled: true
     source_type: "blog"
     reliability: "high"
@@ -115,7 +114,7 @@ sources:
   - id: "stanford_crfm"
     name: "Stanford CRFM"
     type: "page"
-    url: "https://crfm.stanford.edu/"
+    url: "https://crfm.stanford.edu/blog.html"
     enabled: true
     source_type: "blog"
     reliability: "high"
