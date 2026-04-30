@@ -130,24 +130,6 @@ sources:
     reliability: "high"
     evidence_role: "lab_update"
 
-  - id: "baai_news"
-    name: "智源研究院"
-    type: "page"
-    url: "https://www.baai.ac.cn/"
-    enabled: true
-    source_type: "cn_community"
-    reliability: "medium"
-    evidence_role: "cn_research_update"
-
-  - id: "shanghai_ai_lab"
-    name: "上海 AI Lab"
-    type: "page"
-    url: "https://www.shlab.org.cn/"
-    enabled: true
-    source_type: "cn_community"
-    reliability: "medium"
-    evidence_role: "cn_research_update"
-
   - id: "qwen_blog"
     name: "Qwen Blog"
     type: "page"
