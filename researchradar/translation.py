@@ -4,13 +4,12 @@ import re
 import time
 from typing import Any
 import json
-import os
 
-import httpx
 from deep_translator import GoogleTranslator
 
 from .config import load_config
 from .db import Database
+from .llm import LLMCallError, generate_text_sync
 
 
 def has_cjk(text: str) -> bool:
@@ -26,10 +25,7 @@ def fallback_chinese_summary(row: dict[str, Any]) -> str:
 
 class SummaryTranslator:
     def __init__(self, settings: dict[str, Any]):
-        llm = settings.get("llm", {})
-        self.api_key = os.getenv(str(llm.get("api_key_env", "OPENROUTER_API_KEY")))
-        self.base_url = os.getenv(str(llm.get("base_url_env", "OPENROUTER_BASE_URL")), str(llm.get("default_base_url", "https://openrouter.ai/api/v1"))).rstrip("/")
-        self.model = os.getenv(str(llm.get("model_env", "OPENROUTER_MODEL")), str(llm.get("default_model", "gpt-5.4")))
+        self.settings = settings
         self.translator = GoogleTranslator(source="auto", target="zh-CN")
 
     def translate_row(self, row: dict[str, Any]) -> str:
@@ -96,8 +92,6 @@ class SummaryTranslator:
         return results
 
     def translate_rows_with_llm(self, rows: list[dict[str, Any]]) -> list[str] | None:
-        if not self.api_key:
-            return None
         prepared = []
         for row in rows:
             summary = (row.get("summary") or "").strip()
@@ -124,21 +118,15 @@ class SummaryTranslator:
             + json.dumps(prepared, ensure_ascii=False)
         )
         try:
-            response = httpx.post(
-                f"{self.base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
-                json={
-                    "model": self.model,
-                    "messages": [
-                        {"role": "system", "content": "You are a precise English-to-Chinese translator for AI research texts."},
-                        {"role": "user", "content": prompt},
-                    ],
-                    "temperature": 0,
-                },
-                timeout=120,
+            content = generate_text_sync(
+                self.settings,
+                [
+                    {"role": "system", "content": "You are a precise English-to-Chinese translator for AI research texts."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0,
+                max_output_tokens=2400,
             )
-            response.raise_for_status()
-            content = response.json()["choices"][0]["message"]["content"]
             data = parse_json_object(content)
             translations = data.get("translations", [])
             if len(translations) == len(rows):
@@ -146,7 +134,7 @@ class SummaryTranslator:
                     str(text).strip() if text and has_cjk(str(text)) else fallback_chinese_summary(row)
                     for row, text in zip(rows, translations)
                 ]
-        except Exception:
+        except (LLMCallError, Exception):
             return None
         return None
 

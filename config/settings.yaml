@@ -39,17 +39,23 @@ hackernews:
     - "Qwen"
 
 llm:
-  provider: "openrouter_compat"
-  model_env: "OPENROUTER_MODEL"
-  api_key_env: "OPENROUTER_API_KEY"
-  base_url_env: "OPENROUTER_BASE_URL"
-  fallback_api_key_env: "OPENAI_API_KEY"
-  fallback_base_url_env: "OPENAI_BASE_URL"
-  default_base_url: "https://openrouter.ai/api/v1"
+  provider: "openai"
+  wire_api: "responses"
+  model_env: "OPENAI_MODEL"
+  api_key_env: "OPENAI_API_KEY"
+  base_url_env: "OPENAI_BASE_URL"
+  fallback_api_key_envs:
+    - "HAOXIANG_API_KEY"
+  fallback_base_url_envs:
+    - "HAOXIANG_BASE_URL"
+  default_base_url: "https://api.openai.com"
   default_model: "gpt-5.4"
-  chat_timeout_seconds: 24
-  request_timeout_seconds: 20
+  reasoning_effort: "xhigh"
+  disable_response_storage: true
+  chat_timeout_seconds: 90
+  request_timeout_seconds: 75
   max_model_attempts: 1
+  max_output_tokens: 4096
 
 jina:
   api_key_env: "JINA_API_KEY"

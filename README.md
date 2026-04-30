@@ -39,13 +39,13 @@ Put local keys in `.env`. This file is ignored by git.
 
 Supported keys:
 
-- `OPENROUTER_API_KEY`
-- `OPENROUTER_BASE_URL`
-- `OPENROUTER_MODEL`
+- `OPENAI_API_KEY`
+- `OPENAI_BASE_URL`
+- `OPENAI_MODEL`
 - `JINA_API_KEY`
 - `SERPER_API_KEY`
 
-OpenRouter is called through plain OpenAI-compatible `/chat/completions`, without reasoning payload fields, so it works with stricter compatible gateways.
+The default model path uses the OpenAI Responses API. For the Haoxiang gateway, set `OPENAI_BASE_URL=https://ie-crs.haoxiang.ai`; ResearchRadar will fall back to streamed Chat Completions if the Responses endpoint is unavailable or returns empty content.
 
 Chat latency controls live in `config/settings.yaml` under `llm.chat_timeout_seconds`,
 `llm.request_timeout_seconds`, `llm.max_model_attempts`, and `jina.timeout_seconds`.

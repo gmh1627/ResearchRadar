@@ -1254,7 +1254,7 @@ async function askQuestion() {
     console.error(error);
     setMarkdownText(
       $("chatAnswer"),
-      `这次没有收到后端回答。\n\n错误信息：${error.message || String(error)}\n\n可以稍后重试；如果连续出现，优先检查 OPENROUTER_API_KEY / OPENROUTER_BASE_URL / OPENROUTER_MODEL 配置。`
+      `这次没有收到后端回答。\n\n错误信息：${error.message || String(error)}\n\n可以稍后重试；如果连续出现，优先检查 OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL 配置。`
     );
     showToast("提问失败，已把错误写入回答框");
   } finally {

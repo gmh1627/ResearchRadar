@@ -1,30 +1,54 @@
 from __future__ import annotations
 
+import json
 import os
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
 
+@dataclass(frozen=True)
+class LLMConfig:
+    provider: str
+    wire_api: str
+    api_key_env: str
+    base_url_env: str
+    model_env: str
+    api_key: str
+    base_url: str
+    model: str
+    reasoning_effort: str
+    disable_response_storage: bool
+    request_timeout: float
+    max_model_attempts: int
+    max_output_tokens: int
+
+
+class LLMCallError(Exception):
+    def __init__(self, errors: list[str]):
+        super().__init__("; ".join(errors[:3]) if errors else "LLM call failed")
+        self.errors = errors
+
+
 def llm_runtime_status(settings: dict[str, Any]) -> dict[str, Any]:
+    cfg = resolve_llm_config(settings)
     llm = settings.get("llm", {})
-    api_key_env = str(llm.get("api_key_env", "OPENROUTER_API_KEY"))
-    fallback_api_key_env = str(llm.get("fallback_api_key_env", "OPENAI_API_KEY"))
-    base_url_env = str(llm.get("base_url_env", "OPENROUTER_BASE_URL"))
-    model_env = str(llm.get("model_env", "OPENROUTER_MODEL"))
-    primary_key = os.getenv(api_key_env)
-    fallback_key = os.getenv(fallback_api_key_env)
-    base_url = os.getenv(base_url_env) or str(llm.get("default_base_url", "https://openrouter.ai/api/v1"))
-    model = os.getenv(model_env) or str(llm.get("default_model", "openai/gpt-4o-mini"))
     return {
-        "configured": bool(primary_key or fallback_key),
-        "api_key_env": api_key_env if primary_key else fallback_api_key_env,
-        "api_key_present": bool(primary_key or fallback_key),
-        "base_url": base_url,
-        "model": model,
+        "configured": bool(cfg.api_key),
+        "provider": cfg.provider,
+        "wire_api": cfg.wire_api,
+        "api_key_env": cfg.api_key_env,
+        "api_key_present": bool(cfg.api_key),
+        "base_url_env": cfg.base_url_env,
+        "base_url": cfg.base_url,
+        "model_env": cfg.model_env,
+        "model": cfg.model,
+        "reasoning_effort": cfg.reasoning_effort,
+        "disable_response_storage": cfg.disable_response_storage,
         "chat_timeout_seconds": llm.get("chat_timeout_seconds"),
-        "request_timeout_seconds": llm.get("request_timeout_seconds"),
-        "max_model_attempts": llm.get("max_model_attempts"),
+        "request_timeout_seconds": cfg.request_timeout,
+        "max_model_attempts": cfg.max_model_attempts,
     }
 
 
@@ -36,15 +60,8 @@ async def answer_question(
     question: str,
     related_items: list[dict[str, Any]],
 ) -> str:
-    llm = settings.get("llm", {})
-    api_key = os.getenv(str(llm.get("api_key_env", "OPENROUTER_API_KEY")))
-    base_url = os.getenv(str(llm.get("base_url_env", "OPENROUTER_BASE_URL")))
-    if not api_key:
-        api_key = os.getenv(str(llm.get("fallback_api_key_env", "OPENAI_API_KEY")))
-        base_url = os.getenv(str(llm.get("fallback_base_url_env", "OPENAI_BASE_URL")))
-    base_url = (base_url or str(llm.get("default_base_url", "https://openrouter.ai/api/v1"))).rstrip("/")
-    model = os.getenv(str(llm.get("model_env", "OPENROUTER_MODEL")), str(llm.get("default_model", "openai/gpt-4o-mini")))
-    if not api_key:
+    cfg = resolve_llm_config(settings)
+    if not cfg.api_key:
         return fallback_answer(
             profile=profile,
             item=item,
@@ -69,35 +86,15 @@ async def answer_question(
             "content": f"用户问题：{question}\n\n上下文：\n{context}",
         },
     ]
-    max_attempts = max(1, int(llm.get("max_model_attempts", 2)))
-    request_timeout = max(5.0, float(llm.get("request_timeout_seconds", 20)))
-    models = unique_models([model, "gpt-5.4", "openai/gpt-4o-mini", "gpt-4o-mini"])[:max_attempts]
-    errors: list[str] = []
-    timeout = httpx.Timeout(
-        request_timeout,
-        connect=min(8.0, request_timeout),
-        read=request_timeout,
-        write=min(8.0, request_timeout),
-        pool=5.0,
-    )
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        for candidate in models:
-            try:
-                response = await client.post(
-                    f"{base_url}/chat/completions",
-                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                    json={"model": candidate, "messages": messages, "temperature": 0.2},
-                )
-                response.raise_for_status()
-                payload = response.json()
-                content = payload["choices"][0]["message"]["content"].strip()
-                if content:
-                    return content
-            except httpx.HTTPStatusError as exc:
-                detail = exc.response.text[:220].replace("\n", " ")
-                errors.append(f"{candidate}: HTTP {exc.response.status_code} {detail}")
-            except Exception as exc:
-                errors.append(f"{candidate}: {type(exc).__name__} {str(exc)[:120]}")
+    try:
+        content = await generate_text(settings, messages, temperature=0.2)
+        if content:
+            return content
+    except LLMCallError as exc:
+        errors = exc.errors
+    except Exception as exc:
+        errors = [f"{type(exc).__name__}: {str(exc)[:180]}"]
+
     fallback = fallback_answer(
         profile=profile,
         item=item,
@@ -106,6 +103,328 @@ async def answer_question(
         reason="llm_unavailable",
     )
     return fallback + "\n\n大模型接口刚才不可用，已自动降级为本地回答。最近的调用错误：" + "；".join(errors[:3])
+
+
+async def generate_text(
+    settings: dict[str, Any],
+    messages: list[dict[str, str]],
+    *,
+    temperature: float | None = 0.2,
+    max_output_tokens: int | None = None,
+) -> str:
+    cfg = resolve_llm_config(settings)
+    if not cfg.api_key:
+        raise LLMCallError(["missing API key"])
+    errors: list[str] = []
+    timeout = httpx.Timeout(
+        cfg.request_timeout,
+        connect=min(8.0, cfg.request_timeout),
+        read=cfg.request_timeout,
+        write=min(8.0, cfg.request_timeout),
+        pool=5.0,
+    )
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        for model in candidate_models(settings, cfg):
+            for wire_api in candidate_wire_apis(cfg):
+                try:
+                    if wire_api == "responses":
+                        content = await call_responses_api(client, cfg, model, messages, temperature, max_output_tokens)
+                    else:
+                        content = await call_chat_stream_api(client, cfg, model, messages, temperature, max_output_tokens)
+                    if content.strip():
+                        return content.strip()
+                    errors.append(f"{model}/{wire_api}: empty response")
+                except httpx.HTTPStatusError as exc:
+                    detail = exc.response.text[:260].replace("\n", " ")
+                    errors.append(f"{model}/{wire_api}: HTTP {exc.response.status_code} {detail}")
+                except Exception as exc:
+                    errors.append(f"{model}/{wire_api}: {type(exc).__name__} {str(exc)[:180]}")
+    raise LLMCallError(errors)
+
+
+def generate_text_sync(
+    settings: dict[str, Any],
+    messages: list[dict[str, str]],
+    *,
+    temperature: float | None = 0.2,
+    max_output_tokens: int | None = None,
+) -> str:
+    cfg = resolve_llm_config(settings)
+    if not cfg.api_key:
+        raise LLMCallError(["missing API key"])
+    errors: list[str] = []
+    timeout = httpx.Timeout(
+        cfg.request_timeout,
+        connect=min(8.0, cfg.request_timeout),
+        read=cfg.request_timeout,
+        write=min(8.0, cfg.request_timeout),
+        pool=5.0,
+    )
+    with httpx.Client(timeout=timeout) as client:
+        for model in candidate_models(settings, cfg):
+            for wire_api in candidate_wire_apis(cfg):
+                try:
+                    if wire_api == "responses":
+                        content = call_responses_api_sync(client, cfg, model, messages, temperature, max_output_tokens)
+                    else:
+                        content = call_chat_stream_api_sync(client, cfg, model, messages, temperature, max_output_tokens)
+                    if content.strip():
+                        return content.strip()
+                    errors.append(f"{model}/{wire_api}: empty response")
+                except httpx.HTTPStatusError as exc:
+                    detail = exc.response.text[:260].replace("\n", " ")
+                    errors.append(f"{model}/{wire_api}: HTTP {exc.response.status_code} {detail}")
+                except Exception as exc:
+                    errors.append(f"{model}/{wire_api}: {type(exc).__name__} {str(exc)[:180]}")
+    raise LLMCallError(errors)
+
+
+async def call_responses_api(
+    client: httpx.AsyncClient,
+    cfg: LLMConfig,
+    model: str,
+    messages: list[dict[str, str]],
+    temperature: float | None,
+    max_output_tokens: int | None,
+) -> str:
+    response = await client.post(
+        api_endpoint(cfg.base_url, "/responses"),
+        headers=auth_headers(cfg.api_key),
+        json=responses_payload(cfg, model, messages, temperature, max_output_tokens),
+    )
+    response.raise_for_status()
+    return extract_response_text(response.json())
+
+
+def call_responses_api_sync(
+    client: httpx.Client,
+    cfg: LLMConfig,
+    model: str,
+    messages: list[dict[str, str]],
+    temperature: float | None,
+    max_output_tokens: int | None,
+) -> str:
+    response = client.post(
+        api_endpoint(cfg.base_url, "/responses"),
+        headers=auth_headers(cfg.api_key),
+        json=responses_payload(cfg, model, messages, temperature, max_output_tokens),
+    )
+    response.raise_for_status()
+    return extract_response_text(response.json())
+
+
+async def call_chat_stream_api(
+    client: httpx.AsyncClient,
+    cfg: LLMConfig,
+    model: str,
+    messages: list[dict[str, str]],
+    temperature: float | None,
+    max_output_tokens: int | None,
+) -> str:
+    payload = chat_payload(cfg, model, messages, temperature, max_output_tokens)
+    content_parts: list[str] = []
+    async with client.stream(
+        "POST",
+        api_endpoint(cfg.base_url, "/chat/completions"),
+        headers=auth_headers(cfg.api_key),
+        json=payload,
+    ) as response:
+        response.raise_for_status()
+        async for line in response.aiter_lines():
+            collect_chat_stream_line(line, content_parts)
+    return "".join(content_parts)
+
+
+def call_chat_stream_api_sync(
+    client: httpx.Client,
+    cfg: LLMConfig,
+    model: str,
+    messages: list[dict[str, str]],
+    temperature: float | None,
+    max_output_tokens: int | None,
+) -> str:
+    payload = chat_payload(cfg, model, messages, temperature, max_output_tokens)
+    content_parts: list[str] = []
+    with client.stream(
+        "POST",
+        api_endpoint(cfg.base_url, "/chat/completions"),
+        headers=auth_headers(cfg.api_key),
+        json=payload,
+    ) as response:
+        response.raise_for_status()
+        for line in response.iter_lines():
+            collect_chat_stream_line(line, content_parts)
+    return "".join(content_parts)
+
+
+def responses_payload(
+    cfg: LLMConfig,
+    model: str,
+    messages: list[dict[str, str]],
+    temperature: float | None,
+    max_output_tokens: int | None,
+) -> dict[str, Any]:
+    instructions, input_text = split_messages_for_responses(messages)
+    payload: dict[str, Any] = {
+        "model": model,
+        "input": input_text,
+        "stream": False,
+        "max_output_tokens": max_output_tokens or cfg.max_output_tokens,
+    }
+    if instructions:
+        payload["instructions"] = instructions
+    if temperature is not None:
+        payload["temperature"] = temperature
+    if cfg.reasoning_effort:
+        payload["reasoning"] = {"effort": cfg.reasoning_effort}
+    if cfg.disable_response_storage:
+        payload["store"] = False
+    return payload
+
+
+def chat_payload(
+    cfg: LLMConfig,
+    model: str,
+    messages: list[dict[str, str]],
+    temperature: float | None,
+    max_output_tokens: int | None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "stream": True,
+        "max_completion_tokens": max_output_tokens or cfg.max_output_tokens,
+    }
+    if temperature is not None:
+        payload["temperature"] = temperature
+    # The Haoxiang reference client only sends chat reasoning_effort for values
+    # known to be accepted by that gateway.
+    if cfg.reasoning_effort in {"low", "medium", "high"}:
+        payload["reasoning_effort"] = cfg.reasoning_effort
+    return payload
+
+
+def collect_chat_stream_line(line: str, content_parts: list[str]) -> None:
+    if not line.startswith("data:"):
+        return
+    data = line.removeprefix("data:").strip()
+    if not data or data == "[DONE]":
+        return
+    payload = json.loads(data)
+    choices = payload.get("choices") or []
+    if not choices:
+        return
+    delta = choices[0].get("delta") or {}
+    content = delta.get("content")
+    if content:
+        content_parts.append(str(content))
+
+
+def extract_response_text(payload: dict[str, Any]) -> str:
+    if payload.get("output_text"):
+        return str(payload["output_text"])
+    parts: list[str] = []
+    for item in payload.get("output", []) or []:
+        for content in item.get("content", []) or []:
+            if isinstance(content, str):
+                parts.append(content)
+            elif content.get("type") in {"output_text", "text"} and content.get("text"):
+                parts.append(str(content["text"]))
+    if parts:
+        return "".join(parts)
+    choices = payload.get("choices") or []
+    if choices:
+        message = choices[0].get("message") or {}
+        if message.get("content"):
+            return str(message["content"])
+    return ""
+
+
+def split_messages_for_responses(messages: list[dict[str, str]]) -> tuple[str, str]:
+    instructions: list[str] = []
+    inputs: list[str] = []
+    for message in messages:
+        role = message.get("role", "user")
+        content = str(message.get("content", ""))
+        if role in {"system", "developer"}:
+            instructions.append(content)
+        else:
+            inputs.append(content if role == "user" else f"{role}: {content}")
+    return "\n\n".join(instructions), "\n\n".join(inputs)
+
+
+def resolve_llm_config(settings: dict[str, Any]) -> LLMConfig:
+    llm = settings.get("llm", {})
+    api_key_env = str(llm.get("api_key_env", "OPENAI_API_KEY"))
+    api_key, used_api_key_env = first_env(api_key_env, llm.get("fallback_api_key_envs"), llm.get("fallback_api_key_env"))
+    base_url_env = str(llm.get("base_url_env", "OPENAI_BASE_URL"))
+    base_url, used_base_url_env = first_env(base_url_env, llm.get("fallback_base_url_envs"), llm.get("fallback_base_url_env"))
+    model_env = str(llm.get("model_env", "OPENAI_MODEL"))
+    model = os.getenv(model_env) or str(llm.get("default_model", "gpt-5.4"))
+    return LLMConfig(
+        provider=str(llm.get("provider", "openai")),
+        wire_api=str(llm.get("wire_api", "responses")),
+        api_key_env=used_api_key_env or api_key_env,
+        base_url_env=used_base_url_env or base_url_env,
+        model_env=model_env,
+        api_key=api_key or "",
+        base_url=(base_url or str(llm.get("default_base_url", "https://api.openai.com"))).rstrip("/"),
+        model=model,
+        reasoning_effort=str(llm.get("reasoning_effort", "")),
+        disable_response_storage=as_bool(llm.get("disable_response_storage", True)),
+        request_timeout=max(5.0, float(llm.get("request_timeout_seconds", 60))),
+        max_model_attempts=max(1, int(llm.get("max_model_attempts", 1))),
+        max_output_tokens=max(64, int(llm.get("max_output_tokens", 4096))),
+    )
+
+
+def first_env(primary: str, fallback_list: Any = None, fallback_single: Any = None) -> tuple[str, str | None]:
+    env_names = [primary] + as_list(fallback_list) + as_list(fallback_single)
+    for env_name in env_names:
+        if not env_name:
+            continue
+        value = os.getenv(str(env_name))
+        if value:
+            return value, str(env_name)
+    return "", None
+
+
+def candidate_models(settings: dict[str, Any], cfg: LLMConfig) -> list[str]:
+    llm = settings.get("llm", {})
+    return unique_models([cfg.model] + [str(model) for model in as_list(llm.get("fallback_models"))])[: cfg.max_model_attempts]
+
+
+def candidate_wire_apis(cfg: LLMConfig) -> list[str]:
+    preferred = cfg.wire_api.strip().lower()
+    if preferred in {"responses", "response"}:
+        return ["responses", "chat_stream"]
+    if preferred in {"chat_stream", "chat_completions", "chat"}:
+        return ["chat_stream", "responses"]
+    return ["responses", "chat_stream"]
+
+
+def api_endpoint(base_url: str, path: str) -> str:
+    base = base_url.rstrip("/")
+    prefix = "" if base.endswith("/v1") else "/v1"
+    return f"{base}{prefix}{path}"
+
+
+def auth_headers(api_key: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+
+def as_list(value: Any) -> list[str]:
+    if not value:
+        return []
+    if isinstance(value, (list, tuple)):
+        return [str(item) for item in value if str(item).strip()]
+    return [str(value)]
+
+
+def as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 async def fetch_jina_text(settings: dict[str, Any], url: str | None) -> str:
@@ -196,14 +515,12 @@ def fallback_answer(
     reason: str = "no_key",
 ) -> str:
     reason_text = {
-        "no_key": "当前服务没有读到 LLM API key，因此先给你一个本地、基于来源文本的简要回答。",
+        "no_key": "当前服务没有读到 OpenAI API key，因此先给你一个本地、基于来源文本的简要回答。",
         "timeout": "外部模型或原文读取超过本次等待上限，因此先给你一个本地、基于来源文本的简要回答。",
         "llm_unavailable": "外部模型接口暂时不可用，因此先给你一个本地、基于来源文本的简要回答。",
     }.get(reason, "当前先给你一个本地、基于来源文本的简要回答。")
     if not item:
-        return (
-            f"{reason_text}\n\n当前没有绑定具体条目。你可以先在列表里打开一条论文或博客，再基于该条目提问。"
-        )
+        return f"{reason_text}\n\n当前没有绑定具体条目。你可以先在列表里打开一条论文或博客，再基于该条目提问。"
     tags = "、".join(item.get("tags", [])) or "暂无系统标签"
     topics = "、".join(profile.get("primary_topics", [])[:5])
     summary = item.get("summary") or "该来源没有提供摘要，建议打开原文查看细节。"
@@ -224,7 +541,7 @@ def fallback_answer(
 **相关近期条目**：
 {related}
 
-如果你希望每次都拿到完整的大模型回答，请检查模型网关可用性、`OPENROUTER_BASE_URL`、`OPENROUTER_MODEL` 和额度状态。"""
+如果你希望每次都拿到完整的大模型回答，请检查 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL` 和额度状态。"""
 
 
 def unique_models(models: list[str]) -> list[str]:
