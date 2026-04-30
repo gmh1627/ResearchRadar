@@ -148,48 +148,20 @@ sources:
     reliability: "medium"
     evidence_role: "cn_research_update"
 
-  - id: "deepseek_news"
-    name: "DeepSeek"
-    type: "page"
-    url: "https://www.deepseek.com/"
-    enabled: true
-    source_type: "blog"
-    reliability: "high"
-    evidence_role: "official_update"
-
   - id: "qwen_blog"
     name: "Qwen Blog"
-    type: "rss"
-    url: "https://qwenlm.github.io/blog/index.xml"
-    fallback_url: "https://qwenlm.github.io/blog/"
+    type: "page"
+    url: "https://qwen.ai/research"
     enabled: true
     source_type: "blog"
     reliability: "high"
     evidence_role: "official_update"
 
   - id: "moonshot_ai"
-    name: "月之暗面 Moonshot AI"
+    name: "Kimi Blog"
     type: "page"
-    url: "https://www.moonshot.cn/"
+    url: "https://www.kimi.com/blog/"
     enabled: true
     source_type: "blog"
     reliability: "medium"
     evidence_role: "official_update"
-
-  - id: "tsinghua_ai"
-    name: "清华 AI"
-    type: "page"
-    url: "https://air.tsinghua.edu.cn/"
-    enabled: true
-    source_type: "cn_community"
-    reliability: "medium"
-    evidence_role: "cn_research_update"
-
-  - id: "pku_ai"
-    name: "北大 AI"
-    type: "page"
-    url: "https://www.ai.pku.edu.cn/"
-    enabled: true
-    source_type: "cn_community"
-    reliability: "medium"
-    evidence_role: "cn_research_update"
