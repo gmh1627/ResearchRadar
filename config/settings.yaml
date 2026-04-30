@@ -13,7 +13,8 @@ crawl:
   user_agent: "ResearchRadar/0.1 (+local personal research agent)"
 
 ranking:
-  digest_item_count: 12
+  digest_max_items: 36
+  digest_min_items_per_section: 4
   full_radar_days_default: 14
 
 github:
@@ -21,7 +22,6 @@ github:
   keywords:
     - "large language model agent"
     - "LLM reasoning"
-    - "RAG agent"
     - "code agent"
     - "agent memory"
     - "LLM evaluation"
@@ -47,11 +47,15 @@ llm:
   fallback_base_url_env: "OPENAI_BASE_URL"
   default_base_url: "https://openrouter.ai/api/v1"
   default_model: "gpt-5.4"
+  chat_timeout_seconds: 24
+  request_timeout_seconds: 20
+  max_model_attempts: 1
 
 jina:
   api_key_env: "JINA_API_KEY"
   reader_url: "https://r.jina.ai/http://"
   max_chars: 5000
+  timeout_seconds: 6
 
 serper:
   api_key_env: "SERPER_API_KEY"

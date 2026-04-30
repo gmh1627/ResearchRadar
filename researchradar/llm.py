@@ -6,6 +6,28 @@ from typing import Any
 import httpx
 
 
+def llm_runtime_status(settings: dict[str, Any]) -> dict[str, Any]:
+    llm = settings.get("llm", {})
+    api_key_env = str(llm.get("api_key_env", "OPENROUTER_API_KEY"))
+    fallback_api_key_env = str(llm.get("fallback_api_key_env", "OPENAI_API_KEY"))
+    base_url_env = str(llm.get("base_url_env", "OPENROUTER_BASE_URL"))
+    model_env = str(llm.get("model_env", "OPENROUTER_MODEL"))
+    primary_key = os.getenv(api_key_env)
+    fallback_key = os.getenv(fallback_api_key_env)
+    base_url = os.getenv(base_url_env) or str(llm.get("default_base_url", "https://openrouter.ai/api/v1"))
+    model = os.getenv(model_env) or str(llm.get("default_model", "openai/gpt-4o-mini"))
+    return {
+        "configured": bool(primary_key or fallback_key),
+        "api_key_env": api_key_env if primary_key else fallback_api_key_env,
+        "api_key_present": bool(primary_key or fallback_key),
+        "base_url": base_url,
+        "model": model,
+        "chat_timeout_seconds": llm.get("chat_timeout_seconds"),
+        "request_timeout_seconds": llm.get("request_timeout_seconds"),
+        "max_model_attempts": llm.get("max_model_attempts"),
+    }
+
+
 async def answer_question(
     *,
     settings: dict[str, Any],
@@ -23,7 +45,13 @@ async def answer_question(
     base_url = (base_url or str(llm.get("default_base_url", "https://openrouter.ai/api/v1"))).rstrip("/")
     model = os.getenv(str(llm.get("model_env", "OPENROUTER_MODEL")), str(llm.get("default_model", "openai/gpt-4o-mini")))
     if not api_key:
-        return fallback_answer(profile=profile, item=item, question=question, related_items=related_items)
+        return fallback_answer(
+            profile=profile,
+            item=item,
+            question=question,
+            related_items=related_items,
+            reason="no_key",
+        )
 
     source_text = await fetch_jina_text(settings, item.get("url")) if item else ""
     context = build_context(profile, item, related_items, source_text=source_text)
@@ -41,9 +69,18 @@ async def answer_question(
             "content": f"用户问题：{question}\n\n上下文：\n{context}",
         },
     ]
-    models = unique_models([model, "gpt-5.4", "openai/gpt-4o-mini", "gpt-4o-mini"])
+    max_attempts = max(1, int(llm.get("max_model_attempts", 2)))
+    request_timeout = max(5.0, float(llm.get("request_timeout_seconds", 20)))
+    models = unique_models([model, "gpt-5.4", "openai/gpt-4o-mini", "gpt-4o-mini"])[:max_attempts]
     errors: list[str] = []
-    async with httpx.AsyncClient(timeout=90) as client:
+    timeout = httpx.Timeout(
+        request_timeout,
+        connect=min(8.0, request_timeout),
+        read=request_timeout,
+        write=min(8.0, request_timeout),
+        pool=5.0,
+    )
+    async with httpx.AsyncClient(timeout=timeout) as client:
         for candidate in models:
             try:
                 response = await client.post(
@@ -56,9 +93,18 @@ async def answer_question(
                 content = payload["choices"][0]["message"]["content"].strip()
                 if content:
                     return content
+            except httpx.HTTPStatusError as exc:
+                detail = exc.response.text[:220].replace("\n", " ")
+                errors.append(f"{candidate}: HTTP {exc.response.status_code} {detail}")
             except Exception as exc:
-                errors.append(f"{candidate}: {type(exc).__name__}")
-    fallback = fallback_answer(profile=profile, item=item, question=question, related_items=related_items)
+                errors.append(f"{candidate}: {type(exc).__name__} {str(exc)[:120]}")
+    fallback = fallback_answer(
+        profile=profile,
+        item=item,
+        question=question,
+        related_items=related_items,
+        reason="llm_unavailable",
+    )
     return fallback + "\n\n大模型接口刚才不可用，已自动降级为本地回答。最近的调用错误：" + "；".join(errors[:3])
 
 
@@ -68,13 +114,21 @@ async def fetch_jina_text(settings: dict[str, Any], url: str | None) -> str:
     jina = settings.get("jina", {})
     reader_url = str(jina.get("reader_url", "https://r.jina.ai/http://"))
     max_chars = int(jina.get("max_chars", 5000))
+    request_timeout = max(3.0, float(jina.get("timeout_seconds", 6)))
     api_key = os.getenv(str(jina.get("api_key_env", "JINA_API_KEY")))
     headers = {"Accept": "text/plain"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     endpoint = reader_url + url
     try:
-        async with httpx.AsyncClient(timeout=35, follow_redirects=True, headers=headers) as client:
+        timeout = httpx.Timeout(
+            request_timeout,
+            connect=min(5.0, request_timeout),
+            read=request_timeout,
+            write=min(5.0, request_timeout),
+            pool=3.0,
+        )
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
             response = await client.get(endpoint)
             response.raise_for_status()
             return response.text[:max_chars]
@@ -139,18 +193,23 @@ def fallback_answer(
     item: dict[str, Any] | None,
     question: str,
     related_items: list[dict[str, Any]],
+    reason: str = "no_key",
 ) -> str:
+    reason_text = {
+        "no_key": "当前服务没有读到 LLM API key，因此先给你一个本地、基于来源文本的简要回答。",
+        "timeout": "外部模型或原文读取超过本次等待上限，因此先给你一个本地、基于来源文本的简要回答。",
+        "llm_unavailable": "外部模型接口暂时不可用，因此先给你一个本地、基于来源文本的简要回答。",
+    }.get(reason, "当前先给你一个本地、基于来源文本的简要回答。")
     if not item:
         return (
-            "当前没有绑定具体条目，也没有配置 LLM API key。你可以先在列表里打开一条论文或博客，"
-            "再基于该条目提问；配置 OPENROUTER_API_KEY 后可启用完整大模型问答。"
+            f"{reason_text}\n\n当前没有绑定具体条目。你可以先在列表里打开一条论文或博客，再基于该条目提问。"
         )
     tags = "、".join(item.get("tags", [])) or "暂无系统标签"
     topics = "、".join(profile.get("primary_topics", [])[:5])
     summary = item.get("summary") or "该来源没有提供摘要，建议打开原文查看细节。"
     related = "\n".join(f"- {row['title']} ({row['source_name']})" for row in related_items[:3])
     related = related or "- 暂无明显相关条目"
-    return f"""当前未配置 LLM API key，因此先给你一个本地、基于来源文本的简要回答。
+    return f"""{reason_text}
 
 **条目**：{item.get('title')}
 
@@ -165,7 +224,7 @@ def fallback_answer(
 **相关近期条目**：
 {related}
 
-配置 `OPENROUTER_API_KEY`、`OPENROUTER_BASE_URL` 和 `OPENROUTER_MODEL` 后，这里会切换为完整的 source-grounded 大模型回答。"""
+如果你希望每次都拿到完整的大模型回答，请检查模型网关可用性、`OPENROUTER_BASE_URL`、`OPENROUTER_MODEL` 和额度状态。"""
 
 
 def unique_models(models: list[str]) -> list[str]:

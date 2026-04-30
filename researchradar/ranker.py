@@ -23,13 +23,18 @@ SOURCE_AUTHORITY = {
     "hackernews": 0.65,
 }
 
-ACTION_TAGS = {"Agent", "Tool Use", "Memory", "RAG", "Evaluation", "Code Agent", "Self-Improvement"}
+ACTION_TAGS = {"Agent", "Tool Use", "Memory", "Evaluation", "Code Agent", "Self-Improvement"}
 
 
-def rank_items(items: list[dict[str, Any]], profile: dict[str, Any], feedback: dict[str, list[str]]) -> list[dict[str, Any]]:
+def rank_items(
+    items: list[dict[str, Any]],
+    profile: dict[str, Any],
+    feedback: dict[str, list[str]],
+    feedback_signals: dict[str, dict[str, float]] | None = None,
+) -> list[dict[str, Any]]:
     ranked = []
     for item in items:
-        score, parts = score_item(item, profile, feedback.get(item["id"], []))
+        score, parts = score_item(item, profile, feedback.get(item["id"], []), feedback_signals or {})
         card = {
             **item,
             "score": round(score, 3),
@@ -42,7 +47,12 @@ def rank_items(items: list[dict[str, Any]], profile: dict[str, Any], feedback: d
     return ranked
 
 
-def score_item(item: dict[str, Any], profile: dict[str, Any], actions: list[str]) -> tuple[float, dict[str, float]]:
+def score_item(
+    item: dict[str, Any],
+    profile: dict[str, Any],
+    actions: list[str],
+    feedback_signals: dict[str, dict[str, float]],
+) -> tuple[float, dict[str, float]]:
     text = f"{item.get('title', '')}\n{item.get('summary', '')}\n{' '.join(item.get('tags', []))}".lower()
     primary = profile.get("primary_topics", [])
     secondary = profile.get("secondary_topics", [])
@@ -63,6 +73,7 @@ def score_item(item: dict[str, Any], profile: dict[str, Any], actions: list[str]
     trend = trend_signal(item)
     actionability = actionability_signal(item)
     recency = recency_signal(item)
+    personalization = personalization_signal(item, feedback_signals)
     feedback_boost = 0.0
     if "save" in actions or "deep_read" in actions or "like" in actions:
         feedback_boost -= 0.2
@@ -75,6 +86,7 @@ def score_item(item: dict[str, Any], profile: dict[str, Any], actions: list[str]
         + 0.14 * trend
         + 0.14 * actionability
         + 0.12 * recency
+        + 0.12 * personalization
         - 0.28 * negative_penalty
         + feedback_boost
     )
@@ -84,6 +96,7 @@ def score_item(item: dict[str, Any], profile: dict[str, Any], actions: list[str]
         "trend": round(trend, 3),
         "actionability": round(actionability, 3),
         "recency": round(recency, 3),
+        "personalization": round(personalization, 3),
         "negative_penalty": round(negative_penalty, 3),
     }
     return score, parts
@@ -142,7 +155,23 @@ def recency_signal(item: dict[str, Any]) -> float:
         return 0.4
 
 
+def personalization_signal(item: dict[str, Any], signals: dict[str, dict[str, float]]) -> float:
+    if not signals:
+        return 0.0
+    tags = set(item.get("tags", []))
+    source_id = item.get("source_id")
+    positive = sum(signals.get("positive_tags", {}).get(tag, 0.0) for tag in tags) * 0.18
+    positive += signals.get("positive_sources", {}).get(source_id, 0.0) * 0.12
+    negative = sum(signals.get("negative_tags", {}).get(tag, 0.0) for tag in tags) * 0.18
+    negative += signals.get("negative_sources", {}).get(source_id, 0.0) * 0.12
+    return max(-1.0, min(1.0, positive - negative))
+
+
 def build_relevance_reason(item: dict[str, Any], profile: dict[str, Any], parts: dict[str, float]) -> str:
+    if parts.get("personalization", 0) >= 0.35:
+        tags = item.get("tags", [])
+        if tags:
+            return "你的历史反馈偏好相似标签：" + "、".join(tags[:4])
     if parts["relevance"] >= 0.45:
         return short_reason(item.get("title", ""), profile)
     tags = item.get("tags", [])

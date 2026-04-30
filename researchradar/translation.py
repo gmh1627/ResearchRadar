@@ -119,7 +119,7 @@ class SummaryTranslator:
 
         prompt = (
             "请把下面 JSON 数组中的每一条研究信息摘要翻译成简体中文。"
-            "要求：保留技术术语的英文缩写，例如 LLM、RAG、Agent；不要增加原文没有的信息；"
+            "要求：保留技术术语的英文缩写，例如 LLM、Agent、RLHF；不要增加原文没有的信息；"
             "返回严格 JSON，格式为 {\"translations\": [\"...\"]}，数组长度必须相同。\n\n"
             + json.dumps(prepared, ensure_ascii=False)
         )

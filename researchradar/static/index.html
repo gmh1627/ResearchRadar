@@ -4,11 +4,36 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>ResearchRadar</title>
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260430-fixed-sidebar" />
+    <script>
+      window.MathJax = {
+        tex: {
+          inlineMath: [
+            ["$", "$"],
+            ["\\(", "\\)"],
+          ],
+          displayMath: [
+            ["$$", "$$"],
+            ["\\[", "\\]"],
+          ],
+          processEscapes: true,
+        },
+        options: {
+          skipHtmlTags: ["script", "noscript", "style", "textarea", "pre", "code"],
+        },
+        startup: {
+          ready() {
+            MathJax.startup.defaultReady();
+            window.dispatchEvent(new Event("mathjax-ready"));
+          },
+        },
+      };
+    </script>
+    <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
   </head>
   <body>
     <div class="app">
-      <aside class="sidebar">
+      <aside id="navSidebar" class="sidebar">
         <div class="brand">
           <div class="brand-mark">RR</div>
           <div>
@@ -26,7 +51,7 @@
           <button class="nav-item" data-view="blogs">博客与实验室</button>
           <button class="nav-item" data-view="radar">全量雷达</button>
           <button class="nav-item" data-view="sources">信息源</button>
-          <button class="nav-item" data-view="notes">研究笔记</button>
+          <button class="nav-item" data-view="notes">知识库</button>
         </nav>
 
         <div class="ops">
@@ -35,7 +60,6 @@
           <button id="crawl30">回填 30 天</button>
         </div>
       </aside>
-
       <main class="main">
         <section class="topbar">
           <div class="stat">
@@ -84,6 +108,7 @@
             </div>
           </div>
           <div id="arxivList" class="item-list"></div>
+          <button id="arxivMore" class="load-more hidden">加载更多</button>
         </section>
 
         <section id="view-radar" class="view">
@@ -109,6 +134,7 @@
             </div>
           </div>
           <div id="radarList" class="item-list"></div>
+          <button id="radarMore" class="load-more hidden">加载更多</button>
         </section>
 
         <section id="view-blogs" class="view">
@@ -123,6 +149,7 @@
             </div>
           </div>
           <div id="blogList" class="item-list"></div>
+          <button id="blogMore" class="load-more hidden">加载更多</button>
         </section>
 
         <section id="view-sources" class="view">
@@ -138,15 +165,44 @@
         <section id="view-notes" class="view">
           <div class="section-head">
             <div>
-              <h2>研究笔记</h2>
-              <p>从收藏和问答沉淀的长期笔记</p>
+              <h2>知识库</h2>
+              <p>画像、图谱、收藏、问答和笔记的长期沉淀</p>
             </div>
+          </div>
+          <div id="knowledgeStats" class="knowledge-stats"></div>
+          <div id="knowledgeProfile" class="knowledge-profile"></div>
+          <div class="subhead">
+            <h3>知识图谱</h3>
+            <span id="knowledgeGraphMeta" class="muted">基于看过、收藏、问答和笔记生成</span>
+          </div>
+          <div class="graph-shell">
+            <canvas id="knowledgeGraph" width="980" height="560"></canvas>
+          </div>
+          <div class="knowledge-columns">
+            <section>
+              <div class="subhead">
+                <h3>收藏 / 深读</h3>
+                <span class="muted">下一步阅读队列</span>
+              </div>
+              <div id="knowledgeQueue" class="compact-list"></div>
+            </section>
+            <section>
+              <div class="subhead">
+                <h3>最近问答</h3>
+                <span class="muted">可沉淀为笔记的上下文</span>
+              </div>
+              <div id="conversationList" class="compact-list"></div>
+            </section>
+          </div>
+          <div class="subhead notes-head">
+            <h3>知识笔记</h3>
+            <span class="muted">手动记录和保存的回答</span>
           </div>
           <div id="notesList" class="notes"></div>
         </section>
       </main>
 
-      <aside class="detail">
+      <aside id="detailPane" class="detail">
         <div id="detailEmpty" class="empty-state">
           选择一条内容后查看证据卡片和追问。
         </div>
@@ -156,8 +212,11 @@
             <span id="detailSource" class="muted"></span>
           </div>
           <h2 id="detailTitle"></h2>
-          <p id="detailSummary"></p>
+          <div id="detailSummary" class="rich-text markdown-body"></div>
           <div id="detailTags" class="tags"></div>
+          <div id="detailReasons" class="detail-section hidden"></div>
+          <div id="detailFacts" class="evidence-grid"></div>
+          <div id="detailLinks" class="detail-links"></div>
           <div id="detailStatus" class="status-line"></div>
           <div class="detail-actions">
             <a id="detailLink" target="_blank" rel="noreferrer">打开来源</a>
@@ -171,15 +230,31 @@
             <textarea id="chatQuestion" rows="4" placeholder="例如：这和我的 agent memory / future prediction 方向有什么关系？"></textarea>
             <label class="checkbox">
               <input type="checkbox" id="saveNote" />
-              <span>保存回答为研究笔记</span>
+              <span>保存回答为知识笔记</span>
             </label>
             <button id="askBtn">提问</button>
-            <div id="chatAnswer" class="answer"></div>
+            <div id="chatAnswer" class="answer rich-text markdown-body"></div>
+          </div>
+          <div class="note-composer">
+            <h3>条目笔记</h3>
+            <input id="noteTitle" placeholder="笔记标题" />
+            <textarea id="itemNote" rows="4" placeholder="记录你的判断、待读理由、实验想法或引用线索"></textarea>
+            <div class="note-row">
+              <select id="noteImportance">
+                <option value="3">重要性 3</option>
+                <option value="4">重要性 4</option>
+                <option value="5">重要性 5</option>
+                <option value="2">重要性 2</option>
+                <option value="1">重要性 1</option>
+              </select>
+              <button id="saveItemNote">保存笔记</button>
+            </div>
           </div>
         </div>
       </aside>
     </div>
+    <div id="toast" class="toast hidden"></div>
 
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=20260430-fixed-sidebar"></script>
   </body>
 </html>

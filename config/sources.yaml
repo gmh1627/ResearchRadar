@@ -20,8 +20,6 @@ sources:
       - "LLM"
       - "large language model"
       - "agent"
-      - "RAG"
-      - "retrieval augmented generation"
       - "reasoning"
       - "tool use"
       - "multi-agent"
@@ -39,9 +37,9 @@ sources:
     evidence_role: "official_update"
 
   - id: "anthropic_news"
-    name: "Anthropic News"
+    name: "Anthropic Engineering"
     type: "page"
-    url: "https://www.anthropic.com/news"
+    url: "https://www.anthropic.com/engineering"
     enabled: true
     source_type: "blog"
     reliability: "high"

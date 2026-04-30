@@ -13,7 +13,6 @@ profiles:
       - "future prediction"
       - "code agents"
     secondary_topics:
-      - "RAG"
       - "evaluation"
       - "alignment"
       - "open-source LLMs"

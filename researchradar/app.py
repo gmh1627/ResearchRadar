@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from .config import ROOT, load_config
 from .crawler import CrawlManager
 from .db import Database, encode_json
-from .llm import answer_question, serper_search
+from .llm import answer_question, fallback_answer, llm_runtime_status, serper_search
 from .ranker import rank_items
 from .textutils import stable_id
 from .translation import SummaryTranslator
@@ -23,6 +23,36 @@ from .translation import SummaryTranslator
 config = load_config()
 db = Database(config.db_path)
 crawler = CrawlManager(config, db)
+
+DIGEST_SECTIONS = [
+    {
+        "key": "papers",
+        "label": "重点论文",
+        "description": "arXiv 与正式研究条目，优先用于判断方法、实验和可深读价值。",
+    },
+    {
+        "key": "official_updates",
+        "label": "官方与实验室动态",
+        "description": "公司、实验室和中文研究动态，适合快速捕捉能力、产品和研究线索。",
+    },
+    {
+        "key": "code_tools",
+        "label": "代码与工具",
+        "description": "GitHub 项目、工程工具和可复现实验资源。",
+    },
+    {
+        "key": "discussions",
+        "label": "工程讨论",
+        "description": "Hacker News 等社区讨论，主要看真实反馈、质疑和替代方案。",
+    },
+    {
+        "key": "other",
+        "label": "其他值得扫读",
+        "description": "暂不属于以上类别，但仍有一定相关性的近期条目。",
+    },
+]
+
+HIDDEN_DISPLAY_TAGS = {"rag"}
 
 
 @asynccontextmanager
@@ -78,6 +108,11 @@ async def index():
 @app.get("/api/health")
 async def health():
     return {"ok": True, "crawler": crawler.status, "stats": db.stats()}
+
+
+@app.get("/api/llm-status")
+async def llm_status():
+    return llm_runtime_status(config.settings)
 
 
 @app.get("/api/profiles")
@@ -164,10 +199,11 @@ async def available_dates(
 
 
 @app.get("/api/items/{item_id}")
-async def item_detail(item_id: str):
+async def item_detail(item_id: str, user_id: str = "default"):
     item = db.get_item(item_id)
     if not item:
         raise HTTPException(status_code=404, detail="item not found")
+    db.record_item_view(user_id, item_id)
     await ensure_translations([item], max_count=1)
     return with_display_summary(item)
 
@@ -177,13 +213,20 @@ async def digest(user_id: str = "default", days: int = 7, limit: int | None = No
     profile = find_profile(user_id)
     if not profile:
         raise HTTPException(status_code=404, detail="profile not found")
-    rows, _ = db.query_items(days=days, limit=400)
-    ranked = rank_items(rows, profile, db.feedback_for_user(user_id))
-    await ensure_translations(ranked[: (limit or config.digest_item_count)], max_count=30)
-    ranked = [with_display_summary(row) for row in ranked]
+    max_items = max(1, min(limit or config.digest_item_count, 120))
+    rows, _ = db.query_items(days=days, limit=max(500, max_items * 12))
+    ranked = rank_items(rows, profile, db.feedback_for_user(user_id), db.feedback_signals_for_user(user_id))
+    min_per_section = int(config.settings.get("ranking", {}).get("digest_min_items_per_section", 4))
+    selected = select_digest_items(ranked, max_items=max_items, min_per_section=min_per_section)
+    await ensure_translations(selected, max_count=min(max_items, 60))
+    selected = [with_display_summary(row) for row in selected]
+    sections = build_digest_sections(selected)
     return {
         "profile": profile,
-        "items": ranked[: (limit or config.digest_item_count)],
+        "items": selected,
+        "sections": sections,
+        "limit": max_items,
+        "candidate_count": len(rows),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -207,9 +250,40 @@ async def feedback(item_id: str, req: FeedbackRequest):
     return {"ok": True}
 
 
+@app.delete("/api/items/{item_id}/feedback")
+async def delete_feedback(item_id: str, user_id: str = "default", action: str | None = None):
+    removed = db.remove_feedback(user_id, item_id, action)
+    return {"ok": True, "removed": removed}
+
+
 @app.get("/api/notes")
 async def list_notes(user_id: str = "default"):
     return {"notes": db.list_notes(user_id)}
+
+
+@app.get("/api/conversations")
+async def list_conversations(user_id: str = "default", limit: int = 80):
+    return {"conversations": db.list_conversations(user_id, limit=max(1, min(limit, 200)))}
+
+
+@app.get("/api/knowledge")
+async def knowledge(user_id: str = "default"):
+    profile = find_profile(user_id)
+    stats = filter_knowledge_stats(db.knowledge_stats(user_id), profile)
+    saved_items = [with_display_summary(row) for row in db.list_feedback_items(user_id, ["save", "deep_read"], limit=80)]
+    return {
+        "profile": profile,
+        "stats": stats,
+        "items": saved_items,
+        "notes": db.list_notes(user_id),
+        "conversations": db.list_conversations(user_id, limit=60),
+    }
+
+
+@app.get("/api/knowledge/graph")
+async def knowledge_graph(user_id: str = "default", limit: int = 80):
+    items = [with_display_summary(row) for row in db.knowledge_graph_items(user_id, limit=max(10, min(limit, 160)))]
+    return build_knowledge_graph(items)
 
 
 @app.post("/api/notes")
@@ -228,6 +302,18 @@ async def create_note(req: NoteRequest):
     return {"ok": True, "note": note}
 
 
+@app.delete("/api/notes/{note_id}")
+async def delete_note(note_id: str, user_id: str = "default"):
+    removed = db.delete_note(user_id, note_id)
+    return {"ok": True, "removed": removed}
+
+
+@app.delete("/api/conversations/{conversation_id}")
+async def delete_conversation(conversation_id: str, user_id: str = "default"):
+    removed = db.delete_conversation(user_id, conversation_id)
+    return {"ok": True, "removed": removed}
+
+
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
     profile = find_profile(req.user_id)
@@ -235,13 +321,22 @@ async def chat(req: ChatRequest):
         raise HTTPException(status_code=404, detail="profile not found")
     item = db.get_item(req.item_id) if req.item_id else None
     related, _ = db.query_items(days=21, q=" ".join((item or {}).get("tags", [])[:2]), limit=8)
+    chat_timeout = float(config.settings.get("llm", {}).get("chat_timeout_seconds", 30))
     try:
-        answer = await answer_question(
-            settings=config.settings,
-            profile=profile,
-            item=item,
-            question=req.question,
-            related_items=related,
+        answer = await asyncio.wait_for(
+            answer_question(
+                settings=config.settings,
+                profile=profile,
+                item=item,
+                question=req.question,
+                related_items=related,
+            ),
+            timeout=max(8, chat_timeout),
+        )
+    except asyncio.TimeoutError:
+        answer = (
+            fallback_answer(profile=profile, item=item, question=req.question, related_items=related, reason="timeout")
+            + "\n\n外部模型或原文读取超过了本次等待上限，已先返回本地降级回答。你可以稍后重试获取更完整的大模型分析。"
         )
     except Exception as exc:
         answer = (
@@ -260,7 +355,7 @@ async def chat(req: ChatRequest):
     }
     db.add_conversation(conv)
     if req.save_note:
-        title = f"研究笔记：{(item or {}).get('title', req.question)[:80]}"
+        title = f"知识笔记：{(item or {}).get('title', req.question)[:80]}"
         db.add_note(
             {
                 "id": stable_id(req.user_id, title, conv["id"]),
@@ -289,6 +384,142 @@ def find_profile(user_id: str) -> dict[str, Any] | None:
     return config.profiles[0] if config.profiles and user_id == "default" else None
 
 
+def build_digest_sections(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped = {section["key"]: [] for section in DIGEST_SECTIONS}
+    for item in items:
+        grouped[digest_section_key(item)].append(item)
+    return [
+        {
+            **section,
+            "items": grouped[section["key"]],
+            "count": len(grouped[section["key"]]),
+        }
+        for section in DIGEST_SECTIONS
+        if grouped[section["key"]]
+    ]
+
+
+def select_digest_items(ranked: list[dict[str, Any]], *, max_items: int, min_per_section: int) -> list[dict[str, Any]]:
+    grouped = {section["key"]: [] for section in DIGEST_SECTIONS}
+    for item in ranked:
+        grouped[digest_section_key(item)].append(item)
+
+    selected: list[dict[str, Any]] = []
+    selected_ids: set[str] = set()
+
+    def add(item: dict[str, Any]) -> None:
+        item_id = item.get("id")
+        if len(selected) >= max_items or not item_id or item_id in selected_ids:
+            return
+        selected.append(item)
+        selected_ids.add(item_id)
+
+    if min_per_section > 0:
+        for section in DIGEST_SECTIONS:
+            for item in grouped[section["key"]][:min_per_section]:
+                add(item)
+
+    for item in ranked:
+        add(item)
+        if len(selected) >= max_items:
+            break
+
+    return sorted(selected, key=lambda row: row.get("score", 0), reverse=True)
+
+
+def filter_knowledge_stats(stats: dict[str, Any], profile: dict[str, Any] | None) -> dict[str, Any]:
+    negative_terms = set(HIDDEN_DISPLAY_TAGS)
+    if profile:
+        negative_terms.update(str(term).strip().lower() for term in profile.get("negative_topics", []) if str(term).strip())
+    filtered_tags = [
+        row
+        for row in stats.get("top_tags", [])
+        if str(row.get("tag", "")).strip().lower() not in negative_terms
+    ]
+    return {**stats, "top_tags": filtered_tags}
+
+
+def build_knowledge_graph(items: list[dict[str, Any]]) -> dict[str, Any]:
+    nodes: list[dict[str, Any]] = []
+    edges: dict[tuple[str, str], dict[str, Any]] = {}
+    tag_to_items: dict[str, list[str]] = {}
+    source_to_items: dict[str, list[str]] = {}
+
+    for item in items:
+        item_id = item["id"]
+        tags = visible_tags(item.get("tags", []))
+        signal = int(item.get("view_count") or 0) + int(item.get("feedback_count") or 0) * 2
+        signal += int(item.get("conversation_count") or 0) * 2 + int(item.get("note_count") or 0) * 2
+        nodes.append(
+            {
+                "id": item_id,
+                "label": graph_label(item),
+                "title": item.get("title"),
+                "source_name": item.get("source_name"),
+                "source_type": item.get("source_type"),
+                "url": item.get("url"),
+                "tags": tags,
+                "score": item.get("score"),
+                "weight": min(34, 12 + signal * 3 + len(tags)),
+                "timestamp": item.get("knowledge_at") or item.get("display_timestamp"),
+            }
+        )
+        for tag in tags[:8]:
+            tag_to_items.setdefault(tag, []).append(item_id)
+        source_to_items.setdefault(item.get("source_id") or item.get("source_name") or "source", []).append(item_id)
+
+    for tag, ids in tag_to_items.items():
+        add_graph_pairs(edges, ids, "tag", tag, weight=2.2)
+    for source, ids in source_to_items.items():
+        add_graph_pairs(edges, ids[:24], "source", source, weight=1.1)
+
+    return {
+        "nodes": nodes,
+        "edges": list(edges.values()),
+        "stats": {"node_count": len(nodes), "edge_count": len(edges), "tag_count": len(tag_to_items)},
+    }
+
+
+def add_graph_pairs(edges: dict[tuple[str, str], dict[str, Any]], ids: list[str], kind: str, label: str, weight: float) -> None:
+    unique_ids = list(dict.fromkeys(ids))
+    for i, source in enumerate(unique_ids):
+        for target in unique_ids[i + 1 :]:
+            key = tuple(sorted((source, target)))
+            if key not in edges:
+                edges[key] = {"source": key[0], "target": key[1], "weight": 0.0, "reasons": []}
+            edges[key]["weight"] += weight
+            if len(edges[key]["reasons"]) < 3:
+                edges[key]["reasons"].append({"kind": kind, "label": label})
+
+
+def graph_label(item: dict[str, Any]) -> str:
+    title = str(item.get("title") or "Untitled")
+    authors = item.get("authors") or []
+    year = ""
+    timestamp = item.get("published_at") or item.get("collected_at") or ""
+    if timestamp:
+        year = timestamp[:4]
+    if authors:
+        surname = str(authors[0]).split()[-1].strip(",")
+        return f"{surname}, {year}" if year else surname
+    return title[:34] + ("..." if len(title) > 34 else "")
+
+
+def digest_section_key(item: dict[str, Any]) -> str:
+    source_id = item.get("source_id")
+    source_type = item.get("source_type")
+    evidence_role = item.get("evidence_role")
+    if source_type == "paper" or evidence_role == "primary_research":
+        return "papers"
+    if source_id == "github" or source_type == "repo" or evidence_role == "code_signal":
+        return "code_tools"
+    if source_id == "hackernews" or source_type == "discussion" or evidence_role == "engineering_discussion":
+        return "discussions"
+    if source_type in {"blog", "cn_community"} or evidence_role in {"official_update", "lab_update", "cn_research_update"}:
+        return "official_updates"
+    return "other"
+
+
 def validate_item_date(value: str) -> None:
     try:
         dt_date.fromisoformat(value)
@@ -303,7 +534,62 @@ def with_display_summary(item: dict[str, Any]) -> dict[str, Any]:
             summary_zh = "中文摘要生成中，请稍后刷新。"
         else:
             summary_zh = "暂无来源摘要，建议打开原文查看细节。"
-    return {**item, "display_summary": summary_zh}
+    date_value = item.get("published_at") or item.get("collected_at")
+    date_kind = infer_date_kind(item)
+    return {
+        **item,
+        "tags": visible_tags(item.get("tags", [])),
+        "display_summary": summary_zh,
+        "date_kind": date_kind,
+        "display_timestamp": date_value,
+        "evidence_links": build_evidence_links(item),
+    }
+
+
+def visible_tags(tags: list[Any] | tuple[Any, ...] | None) -> list[str]:
+    values: list[str] = []
+    for tag in tags or []:
+        value = str(tag).strip()
+        if value and value.lower() not in HIDDEN_DISPLAY_TAGS:
+            values.append(value)
+    return values
+
+
+def build_evidence_links(item: dict[str, Any]) -> list[dict[str, str]]:
+    metadata = item.get("metadata", {}) or {}
+    links: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def add(label: str, url: str | None) -> None:
+        if not url:
+            return
+        normalized = url.strip()
+        if not normalized or normalized in seen:
+            return
+        seen.add(normalized)
+        links.append({"label": label, "url": normalized})
+
+    source_label = {
+        "paper": "原文",
+        "repo": "代码仓库",
+        "discussion": "讨论",
+        "blog": "来源",
+        "cn_community": "来源",
+    }.get(item.get("source_type"), "来源")
+    add(source_label, item.get("url"))
+    add("PDF", metadata.get("pdf_url"))
+    if metadata.get("arxiv_id"):
+        add("arXiv", f"https://arxiv.org/abs/{metadata['arxiv_id']}")
+    add("HN", metadata.get("hn_url"))
+    return links
+
+
+def infer_date_kind(item: dict[str, Any]) -> str:
+    if not item.get("published_at"):
+        return "discovered"
+    if item.get("source_id") == "github":
+        return "updated"
+    return "published"
 
 
 async def ensure_translations(rows: list[dict[str, Any]], max_count: int = 30) -> None:

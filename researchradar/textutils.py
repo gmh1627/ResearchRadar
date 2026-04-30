@@ -17,7 +17,6 @@ TAG_KEYWORDS: dict[str, list[str]] = {
     "Tool Use": ["tool use", "tool-use", "function calling", "tools"],
     "Reasoning": ["reasoning", "chain-of-thought", "cot", "planning"],
     "Memory": ["memory", "long-term memory", "context management", "consolidation"],
-    "RAG": ["rag", "retrieval augmented", "retrieval-augmented", "retriever"],
     "Evaluation": ["evaluation", "benchmark", "eval", "leaderboard"],
     "Alignment": ["alignment", "preference", "rlhf", "safety"],
     "RL for LLM": ["reinforcement learning", "rl", "policy optimization", "grpo"],

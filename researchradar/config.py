@@ -73,7 +73,8 @@ class AppConfig:
 
     @property
     def digest_item_count(self) -> int:
-        return int(self.settings.get("ranking", {}).get("digest_item_count", 12))
+        ranking = self.settings.get("ranking", {})
+        return int(ranking.get("digest_max_items", ranking.get("digest_item_count", 36)))
 
 
 def load_config() -> AppConfig:

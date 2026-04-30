@@ -67,7 +67,7 @@ class Collector:
                 try:
                     fallback_source = {**source, "type": "page", "url": fallback_url}
                     items = await self.collect_page(fallback_source, target)
-                    return CollectResult(source_id, "success", items, f"rss failed; used fallback: {exc}")
+                    return CollectResult(source_id, "partial", items, f"rss failed; used fallback: {exc}")
                 except Exception as fallback_exc:
                     return CollectResult(source_id, "error", [], f"{exc}; fallback failed: {fallback_exc}")
             return CollectResult(source_id, "error", [], str(exc))
@@ -351,6 +351,7 @@ class Collector:
         tags = extract_tags(title, summary, categories)
         item_id = stable_id(source_id, metadata.get("arxiv_id") or url or title)
         search_text = f"{title}\n{summary}\n{' '.join(tags)}\n{' '.join(categories)}".lower()
+        seen_at = isoformat(now_utc())
         return {
             "id": item_id,
             "source_id": source_id,
@@ -364,7 +365,8 @@ class Collector:
             "categories_json": encode_json([c for c in categories if c]),
             "tags_json": encode_json(tags),
             "published_at": isoformat(published_at),
-            "collected_at": isoformat(now_utc()),
+            "collected_at": seen_at,
+            "last_seen_at": seen_at,
             "source_reliability": source_reliability,
             "evidence_role": evidence_role,
             "metadata_json": json.dumps(metadata or {}, ensure_ascii=False),
