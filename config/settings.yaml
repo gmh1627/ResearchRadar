@@ -4,7 +4,7 @@ server:
 
 crawl:
   timezone: "Asia/Shanghai"
-  daily_time: "07:30"
+  daily_time: "08:40"
   initial_backfill_days: 14
   request_timeout_seconds: 25
   max_items_per_source: 80
@@ -19,12 +19,9 @@ ranking:
 
 github:
   enabled: true
-  keywords:
-    - "large language model agent"
-    - "LLM reasoning"
-    - "code agent"
-    - "agent memory"
-    - "LLM evaluation"
+  daily_rank_url: "https://github.com/OpenGithubs/github-daily-rank"
+  daily_rank_branch: "main"
+  trending_url: "https://github.com/trending"
 
 hackernews:
   enabled: true

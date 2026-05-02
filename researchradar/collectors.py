@@ -75,43 +75,99 @@ class Collector:
     async def collect_github(self, target: date) -> CollectResult:
         if not self.github.get("enabled", True):
             return CollectResult("github", "skipped", [])
-        queries = self.github.get("keywords", [])[:3] or ["llm agent"]
         items: list[dict[str, Any]] = []
         async with self.client() as client:
-            for keyword in queries:
-                query = f"{keyword} pushed:>={target.isoformat()}"
-                response = await client.get(
-                    "https://api.github.com/search/repositories",
-                    params={"q": query, "sort": "updated", "order": "desc", "per_page": 20},
-                )
-                if response.status_code == 403:
-                    raise RuntimeError("GitHub API rate limit or access denied")
-                response.raise_for_status()
-                payload = response.json()
-                for repo in payload.get("items", []):
-                    updated_at = parse_datetime(repo.get("updated_at"))
-                    items.append(
-                        self.make_item(
-                            source_id="github",
-                            source_name="GitHub",
-                            source_type="repo",
-                            title=repo.get("full_name") or repo.get("name") or "GitHub repository",
-                            url=repo.get("html_url", ""),
-                            summary=repo.get("description") or "",
-                            published_at=updated_at,
-                            authors=[repo.get("owner", {}).get("login", "")],
-                            categories=[],
-                            source_reliability="medium",
-                            evidence_role="code_signal",
-                            metadata={
-                                "stars": repo.get("stargazers_count"),
-                                "forks": repo.get("forks_count"),
-                                "language": repo.get("language"),
-                                "keyword": keyword,
-                            },
-                        )
-                    )
+            items.extend(await self.collect_github_daily_rank(client, target))
+            items.extend(await self.collect_github_trending(client, target))
         return CollectResult("github", "success", dedupe_items(items)[: self.max_items])
+
+    async def collect_github_daily_rank(self, client: httpx.AsyncClient, target: date) -> list[dict[str, Any]]:
+        branch = str(self.github.get("daily_rank_branch", "main")).strip() or "main"
+        url = f"https://raw.githubusercontent.com/OpenGithubs/github-daily-rank/{branch}/README.md"
+        response = await client.get(url)
+        response.raise_for_status()
+        text = response.text
+        day_label = target.strftime("%Y.%m.%d")
+        if day_label not in text:
+            return []
+        items: list[dict[str, Any]] = []
+        detail_sections = split_daily_rank_detail_blocks(text)
+        rank_table = parse_daily_rank_table(text)
+        for repo, table_row in rank_table.items():
+            repo_url = f"https://github.com/{repo}"
+            detail = detail_sections.get(repo, {})
+            metadata = {
+                "stars": table_row.get("stars"),
+                "daily_stars": table_row.get("daily_stars"),
+                "weekly_stars": detail.get("weekly_stars"),
+                "monthly_stars": detail.get("monthly_stars"),
+                "rank_source": "github_daily_rank",
+                "rank_date": day_label,
+                "rank_position": table_row.get("rank"),
+            }
+            items.append(
+                self.make_item(
+                    source_id="github",
+                    source_name="GitHub",
+                    source_type="repo",
+                    title=repo,
+                    url=repo_url,
+                    summary=(detail.get("description") or "").strip(),
+                    published_at=parse_datetime(detail.get("created_at")),
+                    authors=[repo.split("/", 1)[0]],
+                    categories=[],
+                    source_reliability="medium",
+                    evidence_role="code_signal",
+                    metadata=metadata,
+                )
+            )
+        return items
+
+    async def collect_github_trending(self, client: httpx.AsyncClient, target: date) -> list[dict[str, Any]]:
+        url = str(self.github.get("trending_url", "https://github.com/trending"))
+        response = await client.get(url)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        items: list[dict[str, Any]] = []
+        for article in soup.select("article.Box-row"):
+            link = article.select_one("h2 a")
+            if not link or not link.get("href"):
+                continue
+            repo = normalize_title(link.get_text(" ", strip=True)).replace(" / ", "/").replace(" ", "")
+            repo_url = canonical_url(urljoin(url, link["href"]))
+            summary = strip_html((article.select_one("p") or article).get_text(" ", strip=True), limit=700)
+            language = text_or_none(article.select_one('[itemprop="programmingLanguage"]'))
+            stars = parse_count(text_or_none(article.select_one("a[href$='/stargazers']")))
+            forks = parse_count(text_or_none(article.select_one("a[href$='/forks']")))
+            today_text = article.get_text(" ", strip=True)
+            today_match = re.search(r"([\d,]+)\s+stars\s+today", today_text, re.IGNORECASE)
+            metadata = {
+                "stars": stars,
+                "forks": forks,
+                "language": language,
+                "daily_stars": parse_count(today_match.group(1)) if today_match else None,
+                "rank_source": "github_trending",
+                "rank_date": target.isoformat(),
+            }
+            items.append(
+                self.make_item(
+                    source_id="github",
+                    source_name="GitHub",
+                    source_type="repo",
+                    title=repo,
+                    url=repo_url,
+                    summary=summary,
+                    published_at=datetime.combine(target, dt_time.min, tzinfo=timezone.utc),
+                    authors=[repo.split("/", 1)[0]],
+                    categories=[],
+                    source_reliability="medium",
+                    evidence_role="code_signal",
+                    metadata=metadata,
+                )
+            )
+            if len(items) >= self.max_items:
+                break
+        return items
 
     async def collect_hackernews(self, target: date) -> CollectResult:
         if not self.hackernews.get("enabled", True):
@@ -301,7 +357,7 @@ class Collector:
             if not plausible_title(title):
                 continue
             url = canonical_url(urljoin(source["url"], anchor["href"]))
-            if url in seen_urls or same_site_noise(url):
+            if url in seen_urls or same_site_noise(url) or page_url_noise(url):
                 continue
             seen_urls.add(url)
             published = extract_time(container)
@@ -473,6 +529,80 @@ def same_site_noise(url: str) -> bool:
             "/trust",
         ]
     )
+
+
+def page_url_noise(url: str) -> bool:
+    low = url.lower().rstrip("/")
+    return any(
+        marker in low
+        for marker in [
+            "/category/",
+            "/categories/",
+            "/tag/",
+            "/tags/",
+            "/topics/",
+            "/topic/",
+            "/search",
+            "?s=",
+            "/page/",
+        ]
+    )
+
+
+def parse_count(value: str | None) -> int | None:
+    if not value:
+        return None
+    text = str(value).strip().lower().replace(",", "")
+    match = re.search(r"(\d+(?:\.\d+)?)\s*([kmb])?", text)
+    if not match:
+        return None
+    number = float(match.group(1))
+    suffix = match.group(2)
+    multiplier = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}.get(suffix, 1)
+    return int(number * multiplier)
+
+
+def text_or_none(element) -> str | None:
+    if not element:
+        return None
+    text = element.get_text(" ", strip=True)
+    return text or None
+
+
+def first_match(text: str, pattern: str) -> str | None:
+    match = re.search(pattern, text)
+    return match.group(1).strip() if match else None
+
+
+def split_daily_rank_detail_blocks(text: str) -> dict[str, dict[str, str | int | None]]:
+    blocks = re.split(r'(?=<h3[^>]*>.*?https://github\.com/)', text)
+    details: dict[str, dict[str, str | int | None]] = {}
+    for block in blocks:
+        repo = first_match(block, r"https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)")
+        if not repo:
+            continue
+        details[repo] = {
+            "created_at": first_match(block, r"📅\s*开源时间[:：]\s*([^\n<]+)"),
+            "description": first_match(block, r"📝\s*项目描述[:：]\s*([^\n<]+)") or "",
+            "weekly_stars": parse_count(first_match(block, r"🔺\s*上周增长数量[:：]\s*([^\n<]+)")),
+            "monthly_stars": parse_count(first_match(block, r"🔺\s*上月增长数量[:：]\s*([^\n<]+)")),
+        }
+    return details
+
+
+def parse_daily_rank_table(text: str) -> dict[str, dict[str, int | None]]:
+    rows: dict[str, dict[str, int | None]] = {}
+    pattern = re.compile(
+        r"\|\s*(?P<rank>\d+)\s*\|\s*\[(?P<repo>[^\]]+)\]\(https://github\.com/[^\)]+\)\|\s*(?P<stars>[^|]+)\|\s*🔺(?P<daily>[^|]+)\|"
+    )
+    for match in pattern.finditer(text):
+        repo = match.group("repo").strip()
+        rows[repo] = {
+            "rank": int(match.group("rank")),
+            "stars": parse_count(match.group("stars")),
+            "daily_stars": parse_count(match.group("daily")),
+        }
+    return rows
 
 
 def extract_time(container) -> datetime | None:

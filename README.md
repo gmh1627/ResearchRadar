@@ -54,7 +54,7 @@ Chat latency controls live in `config/settings.yaml` under `llm.chat_timeout_sec
 
 - On first server startup, ResearchRadar backfills `initial_backfill_days` from `config/settings.yaml` (default 14 days).
 - On later startups, it checks missed crawl days and runs catch-up immediately.
-- While running, it crawls every day at `crawl.daily_time` in `crawl.timezone` (currently 07:30 Asia/Shanghai) and fetches the previous calendar day.
+- While running, it crawls every day at `crawl.daily_time` in `crawl.timezone` (currently 08:40 Asia/Shanghai) and fetches the previous calendar day.
 - Each source run records `success`, `partial`, `skipped`, or `error`; a daily crawl is marked `partial` if any enabled source degrades or fails.
 - Undated page items are sorted by first-discovered time and labeled that way in the UI, so old pages are not silently treated as fresh publications.
 - If SSH disconnects, the background process keeps running.

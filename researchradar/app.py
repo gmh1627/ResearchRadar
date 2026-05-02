@@ -4,6 +4,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from datetime import date as dt_date, datetime, timedelta, timezone
 from pathlib import Path
+import re
 from typing import Any
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
@@ -132,7 +133,8 @@ async def sources():
         "id": "github",
         "name": "GitHub",
         "type": "api",
-        "homepage": "https://github.com/search?q=LLM+agent&type=repositories&s=updated&o=desc",
+        "homepage": "https://github.com/trending",
+        "fallback_url": "https://github.com/OpenGithubs/github-daily-rank",
         "enabled": True,
     }
     configured["hackernews"] = {
@@ -406,13 +408,16 @@ def select_digest_items(ranked: list[dict[str, Any]], *, max_items: int, min_per
 
     selected: list[dict[str, Any]] = []
     selected_ids: set[str] = set()
+    selected_fingerprints: set[str] = set()
 
     def add(item: dict[str, Any]) -> None:
         item_id = item.get("id")
-        if len(selected) >= max_items or not item_id or item_id in selected_ids:
+        fingerprint = digest_item_fingerprint(item)
+        if len(selected) >= max_items or not item_id or item_id in selected_ids or fingerprint in selected_fingerprints:
             return
         selected.append(item)
         selected_ids.add(item_id)
+        selected_fingerprints.add(fingerprint)
 
     if min_per_section > 0:
         for section in DIGEST_SECTIONS:
@@ -518,6 +523,37 @@ def digest_section_key(item: dict[str, Any]) -> str:
     if source_type in {"blog", "cn_community"} or evidence_role in {"official_update", "lab_update", "cn_research_update"}:
         return "official_updates"
     return "other"
+
+
+def digest_item_fingerprint(item: dict[str, Any]) -> str:
+    title = re.sub(r"\s+", " ", str(item.get("title") or "").strip().lower())
+    source_type = str(item.get("source_type") or "")
+    source_id = str(item.get("source_id") or "")
+    if source_type in {"blog", "discussion", "cn_community"}:
+        return f"title:{title}"
+    url = canonical_digest_url(item.get("url"))
+    if source_id == "github" and url:
+        return f"github:{url}"
+    if url:
+        return f"url:{url}"
+    return f"title:{title}"
+
+
+def canonical_digest_url(url: Any) -> str:
+    value = str(url or "").strip().lower().rstrip("/")
+    if not value:
+        return ""
+    value = re.sub(r"https?://", "", value)
+    value = re.sub(r"^www\.", "", value)
+    value = re.sub(r"[?#].*$", "", value)
+    value = value.replace("/index.html", "").rstrip("/")
+    if "/category/" in value:
+        value = value.split("/category/", 1)[0]
+    if "/tags/" in value:
+        value = value.split("/tags/", 1)[0]
+    if "/tag/" in value:
+        value = value.split("/tag/", 1)[0]
+    return value
 
 
 def validate_item_date(value: str) -> None:
