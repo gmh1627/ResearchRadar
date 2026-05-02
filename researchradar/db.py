@@ -117,6 +117,32 @@ class Database:
                     view_count INTEGER NOT NULL DEFAULT 1,
                     PRIMARY KEY(user_id, item_id)
                 );
+
+                CREATE TABLE IF NOT EXISTS digest_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    run_date TEXT NOT NULL,
+                    days INTEGER NOT NULL,
+                    item_limit INTEGER NOT NULL,
+                    candidate_count INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(user_id, run_date, days, item_limit)
+                );
+
+                CREATE TABLE IF NOT EXISTS digest_entries (
+                    run_id INTEGER NOT NULL,
+                    position INTEGER NOT NULL,
+                    item_id TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL,
+                    PRIMARY KEY(run_id, position),
+                    FOREIGN KEY(run_id) REFERENCES digest_runs(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_digest_runs_user_date
+                ON digest_runs(user_id, run_date, created_at);
+
+                CREATE INDEX IF NOT EXISTS idx_digest_entries_fingerprint
+                ON digest_entries(fingerprint);
                 """
             )
             ensure_column(conn, "items", "summary_zh", "TEXT")
@@ -382,6 +408,97 @@ class Database:
                 """,
                 (user_id, item_id, datetime.now(timezone.utc).isoformat()),
             )
+
+    def get_digest_run(self, user_id: str, run_date: str, days: int, item_limit: int) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            run = conn.execute(
+                """
+                SELECT *
+                FROM digest_runs
+                WHERE user_id=? AND run_date=? AND days=? AND item_limit=?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (user_id, run_date, days, item_limit),
+            ).fetchone()
+            if not run:
+                return None
+            rows = conn.execute(
+                """
+                SELECT i.*, de.position
+                FROM digest_entries de
+                JOIN items i ON i.id = de.item_id
+                WHERE de.run_id=?
+                ORDER BY de.position ASC
+                """,
+                (run["id"],),
+            ).fetchall()
+        return {
+            "meta": dict(run),
+            "items": [decode_item(row) for row in rows],
+        }
+
+    def sent_digest_fingerprints(self, user_id: str) -> set[str]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT de.fingerprint
+                FROM digest_entries de
+                JOIN digest_runs dr ON dr.id = de.run_id
+                WHERE dr.user_id=?
+                """,
+                (user_id,),
+            ).fetchall()
+        return {str(row["fingerprint"]).strip() for row in rows if str(row["fingerprint"]).strip()}
+
+    def create_digest_run(
+        self,
+        *,
+        user_id: str,
+        run_date: str,
+        days: int,
+        item_limit: int,
+        candidate_count: int,
+        entries: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        created_at = datetime.now(timezone.utc).isoformat()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO digest_runs(user_id, run_date, days, item_limit, candidate_count, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, run_date, days, item_limit) DO NOTHING
+                """,
+                (user_id, run_date, days, item_limit, candidate_count, created_at),
+            )
+            run = conn.execute(
+                """
+                SELECT *
+                FROM digest_runs
+                WHERE user_id=? AND run_date=? AND days=? AND item_limit=?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (user_id, run_date, days, item_limit),
+            ).fetchone()
+            if not run:
+                raise RuntimeError("failed to create digest run")
+            existing = conn.execute(
+                "SELECT COUNT(*) AS c FROM digest_entries WHERE run_id=?",
+                (run["id"],),
+            ).fetchone()["c"]
+            if not existing:
+                conn.executemany(
+                    """
+                    INSERT INTO digest_entries(run_id, position, item_id, fingerprint)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    [
+                        (run["id"], index, entry["item_id"], entry["fingerprint"])
+                        for index, entry in enumerate(entries)
+                    ],
+                )
+        return dict(run)
 
     def items_missing_translation(self, limit: int = 200) -> list[dict[str, Any]]:
         with self.connect() as conn:

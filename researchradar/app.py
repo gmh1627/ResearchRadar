@@ -6,6 +6,7 @@ from datetime import date as dt_date, datetime, timedelta, timezone
 from pathlib import Path
 import re
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -216,12 +217,44 @@ async def digest(user_id: str = "default", days: int = 7, limit: int | None = No
     if not profile:
         raise HTTPException(status_code=404, detail="profile not found")
     max_items = max(1, min(limit or config.digest_item_count, 120))
+    run_date = datetime.now(ZoneInfo(config.timezone)).date().isoformat()
+    existing_run = db.get_digest_run(user_id, run_date, days, max_items)
+    if existing_run:
+        existing_rows = existing_run["items"]
+        await ensure_translations(existing_rows, max_count=min(max_items, 60))
+        existing_items = [with_display_summary(row) for row in existing_rows]
+        sections = build_digest_sections(existing_items)
+        return {
+            "profile": profile,
+            "items": existing_items,
+            "sections": sections,
+            "limit": max_items,
+            "candidate_count": int(existing_run["meta"].get("candidate_count") or 0),
+            "generated_at": existing_run["meta"]["created_at"],
+        }
     rows, _ = db.query_items(days=days, limit=max(500, max_items * 12))
     ranked = rank_items(rows, profile, db.feedback_for_user(user_id), db.feedback_signals_for_user(user_id))
     min_per_section = int(config.settings.get("ranking", {}).get("digest_min_items_per_section", 4))
-    selected = select_digest_items(ranked, max_items=max_items, min_per_section=min_per_section)
+    sent_fingerprints = db.sent_digest_fingerprints(user_id)
+    selected = select_digest_items(
+        ranked,
+        max_items=max_items,
+        min_per_section=min_per_section,
+        excluded_fingerprints=sent_fingerprints,
+    )
     await ensure_translations(selected, max_count=min(max_items, 60))
     selected = [with_display_summary(row) for row in selected]
+    db.create_digest_run(
+        user_id=user_id,
+        run_date=run_date,
+        days=days,
+        item_limit=max_items,
+        candidate_count=len(rows),
+        entries=[
+            {"item_id": item["id"], "fingerprint": digest_item_fingerprint(item)}
+            for item in selected
+        ],
+    )
     sections = build_digest_sections(selected)
     return {
         "profile": profile,
@@ -401,14 +434,20 @@ def build_digest_sections(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
-def select_digest_items(ranked: list[dict[str, Any]], *, max_items: int, min_per_section: int) -> list[dict[str, Any]]:
+def select_digest_items(
+    ranked: list[dict[str, Any]],
+    *,
+    max_items: int,
+    min_per_section: int,
+    excluded_fingerprints: set[str] | None = None,
+) -> list[dict[str, Any]]:
     grouped = {section["key"]: [] for section in DIGEST_SECTIONS}
     for item in ranked:
         grouped[digest_section_key(item)].append(item)
 
     selected: list[dict[str, Any]] = []
     selected_ids: set[str] = set()
-    selected_fingerprints: set[str] = set()
+    selected_fingerprints: set[str] = set(excluded_fingerprints or set())
 
     def add(item: dict[str, Any]) -> None:
         item_id = item.get("id")
