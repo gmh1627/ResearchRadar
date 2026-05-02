@@ -117,20 +117,24 @@
               <h2>全量雷达</h2>
               <p>论文、博客、代码和社区讨论的统一池</p>
             </div>
-            <div class="filters">
-              <select id="typeFilter">
-                <option value="">全部类型</option>
-                <option value="paper">论文</option>
-                <option value="blog">博客</option>
-                <option value="repo">代码</option>
-                <option value="discussion">讨论</option>
-                <option value="cn_community">中文源</option>
-              </select>
-              <select id="daysFilter">
-                <option value="7">近 7 天</option>
-                <option value="14" selected>近 14 天</option>
-                <option value="30">近 30 天</option>
-              </select>
+            <div class="radar-tools">
+              <div class="filters radar-filters">
+                <select id="typeFilter">
+                  <option value="">全部类型</option>
+                  <option value="paper">论文</option>
+                  <option value="blog">博客</option>
+                  <option value="repo">代码</option>
+                  <option value="discussion">讨论</option>
+                  <option value="cn_community">中文源</option>
+                </select>
+                <select id="daysFilter">
+                  <option value="7">近 7 天</option>
+                  <option value="14" selected>近 14 天</option>
+                  <option value="30">近 30 天</option>
+                </select>
+                <select id="radarDate"></select>
+              </div>
+              <span id="radarCount" class="muted"></span>
             </div>
           </div>
           <div id="radarList" class="item-list"></div>
@@ -255,6 +259,6 @@
     </div>
     <div id="toast" class="toast hidden"></div>
 
-    <script src="/static/app.js?v=20260430-openai-api"></script>
+    <script src="/static/app.js?v=20260502-radar-history"></script>
   </body>
 </html>

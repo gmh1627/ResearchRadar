@@ -12,6 +12,7 @@ const state = {
   search: "",
   arxivDate: "",
   blogDate: "",
+  radarDate: "",
   pages: {
     arxiv: createPage(),
     radar: createPage(),
@@ -642,19 +643,36 @@ async function loadArxiv(options = {}) {
 
 async function loadRadar(options = {}) {
   const append = options.append === true;
+  const reloadDates = options.reloadDates !== false && !append;
+  if (reloadDates || !state.radarDate) {
+    await loadDateChoices({
+      selectId: "radarDate",
+      countId: "radarCount",
+      dateKey: "radarDate",
+      params: `source_type=${encodeURIComponent($("typeFilter").value || "")}`,
+    });
+  }
+  if (!state.radarDate) {
+    state.pages.radar = createPage();
+    renderList("radarList", [], "radar", "暂无雷达数据。");
+    updateMoreButton("radar", "radarMore");
+    return;
+  }
   const page = state.pages.radar;
   if (page.loading) return;
   if (!append) page.items = [];
   page.loading = true;
   updateMoreButton("radar", "radarMore");
   try {
-    const days = $("daysFilter").value;
     const type = $("typeFilter").value;
     const q = encodeURIComponent(state.search || "");
     const offset = append ? page.items.length : 0;
-    const data = await api(`/api/items?days=${days}&source_type=${encodeURIComponent(type)}&q=${q}&limit=${PAGE_SIZE}&offset=${offset}`);
+    const data = await api(
+      `/api/items?date=${encodeURIComponent(state.radarDate)}&source_type=${encodeURIComponent(type)}&q=${q}&limit=${PAGE_SIZE}&offset=${offset}`
+    );
     page.total = data.total;
     page.items = append ? page.items.concat(data.items) : data.items;
+    $("radarCount").textContent = `显示 ${page.items.length} / 共 ${page.total} 条`;
     renderList("radarList", page.items, "radar", "暂无雷达数据。");
   } finally {
     page.loading = false;
@@ -1306,15 +1324,26 @@ function bindEvents() {
     state.arxivDate = $("arxivDate").value;
     loadArxiv({ reloadDates: false }).catch(showError);
   });
+  $("radarDate").addEventListener("change", () => {
+    state.radarDate = $("radarDate").value;
+    loadRadar({ reloadDates: false }).catch(showError);
+  });
   $("blogDate").addEventListener("change", () => {
     state.blogDate = $("blogDate").value;
     loadBlogs({ reloadDates: false }).catch(showError);
   });
-  $("daysFilter").addEventListener("change", () => loadRadar().catch(showError));
-  $("typeFilter").addEventListener("change", () => loadRadar().catch(showError));
+  $("daysFilter").addEventListener("change", () => {
+    state.radarDate = "";
+    loadRadar().catch(showError);
+  });
+  $("typeFilter").addEventListener("change", () => {
+    state.radarDate = "";
+    loadRadar().catch(showError);
+  });
   $("searchBtn").addEventListener("click", () => {
     state.search = $("searchInput").value.trim();
     state.arxivDate = "";
+    state.radarDate = "";
     state.blogDate = "";
     refreshView().catch(showError);
   });
@@ -1322,6 +1351,7 @@ function bindEvents() {
     if (event.key === "Enter") {
       state.search = $("searchInput").value.trim();
       state.arxivDate = "";
+      state.radarDate = "";
       state.blogDate = "";
       refreshView().catch(showError);
     }

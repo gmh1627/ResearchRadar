@@ -262,6 +262,15 @@ textarea {
   gap: 8px;
 }
 
+.radar-tools {
+  display: grid;
+  gap: 6px;
+}
+
+.radar-filters {
+  grid-template-columns: 150px 130px minmax(190px, 240px);
+}
+
 .item-list {
   display: grid;
   gap: 10px;
