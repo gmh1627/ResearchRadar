@@ -143,6 +143,17 @@ class Database:
 
                 CREATE INDEX IF NOT EXISTS idx_digest_entries_fingerprint
                 ON digest_entries(fingerprint);
+
+                CREATE TABLE IF NOT EXISTS item_fingerprints (
+                    fingerprint TEXT PRIMARY KEY,
+                    item_id TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
+                    source_type TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_item_fingerprints_item
+                ON item_fingerprints(item_id);
                 """
             )
             ensure_column(conn, "items", "summary_zh", "TEXT")
@@ -154,9 +165,13 @@ class Database:
                 WHERE last_seen_at IS NULL OR last_seen_at = ''
                 """
             )
+            self.backfill_item_fingerprints(conn)
 
     def upsert_items(self, items: Iterable[dict[str, Any]]) -> int:
         rows = list(items)
+        if not rows:
+            return 0
+        rows = self.filter_new_items(rows)
         if not rows:
             return 0
         with self.connect() as conn:
@@ -187,7 +202,84 @@ class Database:
                 """,
                 rows,
             )
+            conn.executemany(
+                """
+                INSERT OR IGNORE INTO item_fingerprints(
+                    fingerprint, item_id, source_id, source_type, created_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        item["content_fingerprint"],
+                        item["id"],
+                        item["source_id"],
+                        item["source_type"],
+                        item["collected_at"],
+                    )
+                    for item in rows
+                    if item.get("content_fingerprint")
+                ],
+            )
             return conn.total_changes - before
+
+    def filter_new_items(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not items:
+            return []
+        incoming: list[dict[str, Any]] = []
+        seen_in_batch: set[str] = set()
+        for item in items:
+            fingerprint = content_fingerprint(item)
+            item["content_fingerprint"] = fingerprint
+            if fingerprint and fingerprint in seen_in_batch:
+                continue
+            if fingerprint:
+                seen_in_batch.add(fingerprint)
+            incoming.append(item)
+        fingerprints = [item["content_fingerprint"] for item in incoming if item.get("content_fingerprint")]
+        existing: set[str] = set()
+        if fingerprints:
+            placeholders = ", ".join("?" for _ in fingerprints)
+            with self.connect() as conn:
+                rows = conn.execute(
+                    f"SELECT fingerprint FROM item_fingerprints WHERE fingerprint IN ({placeholders})",
+                    fingerprints,
+                ).fetchall()
+            existing = {row["fingerprint"] for row in rows}
+        return [item for item in incoming if not item.get("content_fingerprint") or item["content_fingerprint"] not in existing]
+
+    def backfill_item_fingerprints(self, conn: sqlite3.Connection) -> None:
+        existing = conn.execute("SELECT COUNT(*) AS c FROM item_fingerprints").fetchone()["c"]
+        if existing:
+            return
+        rows = conn.execute("SELECT * FROM items ORDER BY COALESCE(published_at, collected_at) ASC, id ASC").fetchall()
+        seen: set[str] = set()
+        payload: list[tuple[str, str, str, str, str]] = []
+        for row in rows:
+            item = decode_item(row)
+            fingerprint = content_fingerprint(item)
+            if not fingerprint or fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            payload.append(
+                (
+                    fingerprint,
+                    item["id"],
+                    item["source_id"],
+                    item["source_type"],
+                    item.get("collected_at") or datetime.now(timezone.utc).isoformat(),
+                )
+            )
+        if payload:
+            conn.executemany(
+                """
+                INSERT OR IGNORE INTO item_fingerprints(
+                    fingerprint, item_id, source_id, source_type, created_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                payload,
+            )
 
     def mark_day_started(self, target_date: date) -> None:
         ts = datetime.now(timezone.utc).isoformat()
@@ -788,3 +880,49 @@ def decode_item(row: sqlite3.Row) -> dict[str, Any]:
     item["tags"] = json.loads(item.pop("tags_json") or "[]")
     item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
     return item
+
+
+def content_fingerprint(item: dict[str, Any]) -> str:
+    source_id = str(item.get("source_id") or "").strip().lower()
+    source_type = str(item.get("source_type") or "").strip().lower()
+    title = normalize_fingerprint_text(item.get("title"))
+    url = normalize_fingerprint_url(item.get("url"))
+    metadata = item.get("metadata")
+    if metadata is None and item.get("metadata_json"):
+        try:
+            metadata = json.loads(item["metadata_json"] or "{}")
+        except Exception:
+            metadata = {}
+    metadata = metadata or {}
+
+    if source_id == "github":
+        return f"github:{url or title}"
+    if source_id == "arxiv_core":
+        arxiv_id = str(metadata.get("arxiv_id") or "").strip().lower()
+        return f"arxiv:{arxiv_id or url or title}"
+    if source_type in {"blog", "discussion", "cn_community"}:
+        return f"text:{title}"
+    if url:
+        return f"url:{url}"
+    return f"text:{title}"
+
+
+def normalize_fingerprint_text(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    return " ".join(text.split())
+
+
+def normalize_fingerprint_url(value: Any) -> str:
+    url = str(value or "").strip().lower()
+    if not url:
+        return ""
+    url = url.replace("https://", "").replace("http://", "")
+    if url.startswith("www."):
+        url = url[4:]
+    url = url.split("#", 1)[0].split("?", 1)[0].rstrip("/")
+    for marker in ["/category/", "/categories/", "/tag/", "/tags/", "/topics/", "/topic/"]:
+        if marker in url:
+            url = url.split(marker, 1)[0].rstrip("/")
+    if url.endswith("/index.html"):
+        url = url[: -len("/index.html")]
+    return url
