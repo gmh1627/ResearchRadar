@@ -220,14 +220,20 @@ class Collector:
 
     async def collect_arxiv(self, source: dict[str, Any], target: date) -> list[dict[str, Any]]:
         items = []
-        core_query = self.build_arxiv_query(source.get("categories", []), [], target)
-        items.extend(await self.fetch_arxiv_query(source, core_query))
-        conditional_categories = source.get("conditional_categories", [])
-        conditional_keywords = source.get("conditional_keywords", [])
-        if conditional_categories and conditional_keywords:
-            conditional_query = self.build_arxiv_query(conditional_categories, conditional_keywords, target)
-            items.extend(await self.fetch_arxiv_query(source, conditional_query))
-        return dedupe_items(items)
+        try:
+            core_query = self.build_arxiv_query(source.get("categories", []), [], target)
+            items.extend(await self.fetch_arxiv_query(source, core_query))
+            conditional_categories = source.get("conditional_categories", [])
+            conditional_keywords = source.get("conditional_keywords", [])
+            if conditional_categories and conditional_keywords:
+                conditional_query = self.build_arxiv_query(conditional_categories, conditional_keywords, target)
+                items.extend(await self.fetch_arxiv_query(source, conditional_query))
+            items = dedupe_items(items)
+            if items:
+                return items
+        except Exception:
+            items = []
+        return await self.collect_arxiv_recent_pages(source, target)
 
     def build_arxiv_query(self, categories: list[str], keywords: list[str], target: date) -> str:
         category_query = " OR ".join(f"cat:{category}" for category in categories)
@@ -260,6 +266,8 @@ class Collector:
                         "sortOrder": "descending",
                     },
                 )
+                if response.status_code == 429:
+                    raise RuntimeError("arXiv API rate exceeded")
                 response.raise_for_status()
                 batch = self.parse_arxiv_feed(response.text, source)
                 items.extend(batch)
@@ -268,6 +276,16 @@ class Collector:
                 start += self.arxiv_page_size
                 await asyncio.sleep(3.1)
         return items
+
+    async def collect_arxiv_recent_pages(self, source: dict[str, Any], target: date) -> list[dict[str, Any]]:
+        categories = list(dict.fromkeys((source.get("categories", []) or []) + (source.get("conditional_categories", []) or [])))
+        items: list[dict[str, Any]] = []
+        async with self.client() as client:
+            for category in categories:
+                response = await client.get(f"https://arxiv.org/list/{category}/pastweek?show=2000")
+                response.raise_for_status()
+                items.extend(self.parse_arxiv_recent_html(response.text, source, target, category))
+        return dedupe_items(items)
 
     def parse_arxiv_feed(self, xml_text: str, source: dict[str, Any]) -> list[dict[str, Any]]:
         root = ET.fromstring(xml_text)
@@ -307,6 +325,55 @@ class Collector:
                     metadata={"arxiv_id": arxiv_id, "pdf_url": pdf_url},
                 )
             )
+        return out
+
+    def parse_arxiv_recent_html(self, html_text: str, source: dict[str, Any], target: date, category: str) -> list[dict[str, Any]]:
+        soup = BeautifulSoup(html_text, "html.parser")
+        out: list[dict[str, Any]] = []
+        for heading in soup.find_all("h3"):
+            heading_date = parse_arxiv_heading_date(heading.get_text(" ", strip=True))
+            if heading_date != target:
+                continue
+            dl = heading.find_next_sibling("dl")
+            if not dl:
+                continue
+            dts = dl.find_all("dt", recursive=False)
+            dds = dl.find_all("dd", recursive=False)
+            for dt, dd in zip(dts, dds):
+                abs_link = dt.find("a", href=re.compile(r"^/abs/"))
+                if not abs_link:
+                    continue
+                abs_url = canonical_url(urljoin("https://arxiv.org", abs_link["href"]))
+                arxiv_id = abs_link["href"].rsplit("/", 1)[-1]
+                pdf_link = dt.find("a", href=re.compile(r"^/pdf/"))
+                title = extract_recent_field(dd, "Title:")
+                if not title:
+                    continue
+                authors = [name.strip() for name in extract_recent_field(dd, "Authors:").split(",") if name.strip()]
+                comments = extract_recent_field(dd, "Comments:")
+                subjects = extract_recent_field(dd, "Subjects:")
+                summary = comments or subjects or title
+                categories = [part.strip() for part in subjects.split(";") if part.strip()] if subjects else [category]
+                out.append(
+                    self.make_item(
+                        source_id=source["id"],
+                        source_name=source["name"],
+                        source_type=source.get("source_type", "paper"),
+                        title=title,
+                        url=abs_url,
+                        summary=summary,
+                        published_at=datetime.combine(target, dt_time.min, tzinfo=timezone.utc),
+                        authors=authors,
+                        categories=categories,
+                        source_reliability=source.get("reliability", "high"),
+                        evidence_role=source.get("evidence_role", "primary_research"),
+                        metadata={
+                            "arxiv_id": arxiv_id,
+                            "pdf_url": canonical_url(urljoin("https://arxiv.org", pdf_link["href"])) if pdf_link else "",
+                            "fallback_source": "pastweek_page",
+                        },
+                    )
+                )
         return out
 
     async def collect_rss(self, source: dict[str, Any], target: date) -> list[dict[str, Any]]:
@@ -572,6 +639,50 @@ def text_or_none(element) -> str | None:
 def first_match(text: str, pattern: str) -> str | None:
     match = re.search(pattern, text)
     return match.group(1).strip() if match else None
+
+
+def parse_arxiv_heading_date(value: str) -> date | None:
+    match = re.search(r"([A-Za-z]{3}),\s+(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})", value)
+    if not match:
+        return None
+    month_map = {
+        "Jan": 1,
+        "Feb": 2,
+        "Mar": 3,
+        "Apr": 4,
+        "May": 5,
+        "Jun": 6,
+        "Jul": 7,
+        "Aug": 8,
+        "Sep": 9,
+        "Oct": 10,
+        "Nov": 11,
+        "Dec": 12,
+    }
+    day = int(match.group(2))
+    month = month_map.get(match.group(3))
+    year = int(match.group(4))
+    if not month:
+        return None
+    return date(year, month, day)
+
+
+def extract_recent_field(container, label: str) -> str:
+    for div in container.find_all("div", class_="list-title"):
+        text = div.get_text(" ", strip=True)
+        if text.startswith(label):
+            return text.replace(label, "", 1).strip()
+    for div in container.find_all("div", class_="list-authors"):
+        if label == "Authors:":
+            names = [a.get_text(" ", strip=True) for a in div.find_all("a")]
+            return ", ".join(name for name in names if name)
+    for div in container.find_all("div", class_="list-comments"):
+        if label == "Comments:":
+            return div.get_text(" ", strip=True).replace("Comments:", "", 1).strip()
+    for div in container.find_all("div", class_="list-subjects"):
+        if label == "Subjects:":
+            return div.get_text(" ", strip=True).replace("Subjects:", "", 1).strip()
+    return ""
 
 
 def split_daily_rank_detail_blocks(text: str) -> dict[str, dict[str, str | int | None]]:
