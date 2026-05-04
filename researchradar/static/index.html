@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>ResearchRadar</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260430-fixed-sidebar" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260503-dpi-fix" />
     <script>
       window.MathJax = {
         tex: {
@@ -46,15 +46,34 @@
         <select id="profileSelect"></select>
 
         <nav class="nav">
-          <button class="nav-item active" data-view="digest">个性日报</button>
-          <button class="nav-item" data-view="arxiv">每日 arXiv</button>
-          <button class="nav-item" data-view="blogs">博客与实验室</button>
-          <button class="nav-item" data-view="radar">全量雷达</button>
-          <button class="nav-item" data-view="sources">信息源</button>
-          <button class="nav-item" data-view="notes">知识库</button>
+          <button class="nav-item active" data-view="digest">
+            <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 3.5h12M2 7.5h9M2 11.5h7"/></svg>
+            个性日报
+          </button>
+          <button class="nav-item" data-view="arxiv">
+            <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 2h8a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1zm2 3.5h4m-4 3h4m-4 3h2"/></svg>
+            每日 arXiv
+          </button>
+          <button class="nav-item" data-view="blogs">
+            <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 14V6.5L8 2l6 4.5V14H2zm4 0V9.5h4V14"/></svg>
+            博客与实验室
+          </button>
+          <button class="nav-item" data-view="radar">
+            <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6.5"/><circle cx="8" cy="8" r="3"/><circle cx="8" cy="8" r="1" fill="currentColor" stroke="none"/></svg>
+            全量雷达
+          </button>
+          <button class="nav-item" data-view="sources">
+            <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><ellipse cx="8" cy="4.5" rx="5" ry="2"/><path d="M3 4.5v3c0 1.1 2.24 2 5 2s5-.9 5-2v-3M3 7.5v3c0 1.1 2.24 2 5 2s5-.9 5-2v-3"/></svg>
+            信息源
+          </button>
+          <button class="nav-item" data-view="notes">
+            <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 2h7l3 3v9a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1zm7 0v3h3M5 8.5h6M5 11.5h4"/></svg>
+            知识库
+          </button>
         </nav>
 
         <div class="ops">
+          <div class="ops-label">数据抓取</div>
           <button id="crawl1">抓取今天</button>
           <button id="crawl14">回填 14 天</button>
           <button id="crawl30">回填 30 天</button>
@@ -259,6 +278,6 @@
     </div>
     <div id="toast" class="toast hidden"></div>
 
-    <script src="/static/app.js?v=20260502-radar-history"></script>
+    <script src="/static/app.js?v=20260504-percent-fix"></script>
   </body>
 </html>

@@ -191,6 +191,7 @@ function renderInlineMarkdown(value) {
 
   text = text.replace(/`([^`\n]+)`/g, (_, code) => addToken(`<code>${escapeHtml(code)}</code>`));
   text = text.replace(/(\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|\$[^$\n]+?\$)/g, (match) => addToken(escapeHtml(match)));
+  text = text.replace(/\\%/g, "%");
   text = text.replace(/\\href\s*\{([^{}]+)\}\s*\{([^{}]+)\}/g, (_, url, label) => addLinkToken(url, label));
   text = text.replace(/\\url\s*\{([^{}]+)\}/g, (_, url) => addLinkToken(url, url));
   text = text.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, label, url) => addLinkToken(url, label));
@@ -414,7 +415,7 @@ function renderItem(item, mode = "radar") {
   const summary = item.display_summary || item.summary_zh || "中文摘要生成中，请稍后刷新。";
   const facts = renderItemFacts(item);
   return `
-    <article class="item-card${selected}" data-id="${escapeHtml(item.id)}" tabindex="0">
+    <article class="item-card${selected}" data-id="${escapeHtml(item.id)}" data-type="${escapeHtml(item.source_type || "")}" tabindex="0">
       <div class="item-meta">
         <span class="pill ${pillClass(item.source_type)}">${escapeHtml(typeLabel(item.source_type))}</span>
         <span class="muted">${escapeHtml(item.source_name)}</span>
@@ -854,7 +855,7 @@ function renderKnowledgeQueue(items) {
         const action = FEEDBACK_ACTION_LABELS[item.feedback_action] || item.feedback_action || "已标记";
         const summary = item.display_summary || item.summary_zh || item.summary || "";
         return `
-          <article class="compact-item item-card" data-id="${escapeHtml(item.id)}" tabindex="0">
+          <article class="compact-item item-card" data-id="${escapeHtml(item.id)}" data-type="${escapeHtml(item.source_type || "")}" tabindex="0">
             <button class="icon-action delete-feedback" data-id="${escapeHtml(item.id)}" data-action="${escapeHtml(item.feedback_action || "")}" title="从收藏/深读移除" aria-label="从收藏/深读移除">×</button>
             <div class="item-meta">
               <span class="pill ${pillClass(item.source_type)}">${escapeHtml(typeLabel(item.source_type))}</span>
@@ -919,26 +920,38 @@ async function loadKnowledgeGraph() {
 function renderKnowledgeGraph(graph) {
   const canvas = $("knowledgeGraph");
   if (!canvas) return;
+  // Fit canvas to its container at native device resolution (fixes coordinate mismatch)
+  const shell = canvas.parentElement;
+  const dpr = window.devicePixelRatio || 1;
+  const logW = shell ? Math.max(shell.clientWidth || 0, 300) : 700;
+  const logH = Math.round(logW * 0.50);
+  canvas.style.height = logH + "px";
+  canvas.width = Math.round(logW * dpr);
+  canvas.height = Math.round(logH * dpr);
+  state.graph.logW = logW;
+  state.graph.logH = logH;
+  state.graph.dpr = dpr;
   const nodes = (graph.nodes || []).map((node) => ({
     ...node,
     tags: visibleTags(node.tags),
     weight: Number(node.weight || 14),
-    x: 0,
-    y: 0,
+    x: 0, y: 0, vx: 0, vy: 0,
   }));
   const nodeMap = new Map(nodes.map((node) => [node.id, node]));
   const edges = (graph.edges || [])
     .map((edge) => ({ ...edge, sourceNode: nodeMap.get(edge.source), targetNode: nodeMap.get(edge.target) }))
     .filter((edge) => edge.sourceNode && edge.targetNode);
-  layoutGraph(canvas, nodes, edges);
+  initGraphPositions(canvas, nodes);
   state.graph.nodes = nodes;
   state.graph.edges = edges;
   state.graph.activeNode = null;
+  state.graph.tick = 0;
+  state.graph.settled = false;
   $("knowledgeGraphMeta").textContent = `${nodes.length} 个节点 · ${edges.length} 条关系`;
   if (state.graph.animation) cancelAnimationFrame(state.graph.animation);
   state.graph.animation = null;
   bindGraphCanvas(canvas);
-  drawGraph(canvas.getContext("2d"), nodes, edges);
+  startGraphAnimation(canvas);
 }
 
 function bindGraphCanvas(canvas) {
@@ -946,20 +959,23 @@ function bindGraphCanvas(canvas) {
   canvas.dataset.bound = "true";
   canvas.addEventListener("mousemove", (event) => {
     const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    const x = (event.clientX - rect.left) * scaleX;
-    const y = (event.clientY - rect.top) * scaleY;
-    const nextNode = state.graph.nodes.find((node) => Math.hypot(node.x - x, node.y - y) < graphRadius(node) + 8) || null;
-    const changed = (state.graph.activeNode && state.graph.activeNode.id) !== (nextNode && nextNode.id);
-    state.graph.activeNode = nextNode;
-    canvas.style.cursor = state.graph.activeNode ? "pointer" : "default";
-    if (changed) drawGraph(canvas.getContext("2d"), state.graph.nodes, state.graph.edges);
+    // Coordinates are in logical pixels (CSS px) which match node positions
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    const next = state.graph.nodes.find((n) => Math.hypot(n.x - x, n.y - y) < graphRadius(n) + 8) || null;
+    const changed = (state.graph.activeNode && state.graph.activeNode.id) !== (next && next.id);
+    state.graph.activeNode = next;
+    canvas.style.cursor = next ? "pointer" : "default";
+    if (changed && state.graph.settled) {
+      drawGraphEnhanced(canvas.getContext("2d"), canvas, state.graph.nodes, state.graph.edges);
+    }
   });
   canvas.addEventListener("mouseleave", () => {
     state.graph.activeNode = null;
     canvas.style.cursor = "default";
-    drawGraph(canvas.getContext("2d"), state.graph.nodes, state.graph.edges);
+    if (state.graph.settled) {
+      drawGraphEnhanced(canvas.getContext("2d"), canvas, state.graph.nodes, state.graph.edges);
+    }
   });
   canvas.addEventListener("click", () => {
     const node = state.graph.activeNode;
@@ -970,173 +986,298 @@ function bindGraphCanvas(canvas) {
   });
 }
 
-function layoutGraph(canvas, nodes, edges) {
-  const width = canvas.width;
-  const height = canvas.height;
+// ── Graph: set initial cluster positions (physics handles refinement) ──
+function initGraphPositions(canvas, nodes) {
+  const W = state.graph.logW || canvas.width;
+  const H = state.graph.logH || canvas.height;
   const centers = {
-    paper: { x: width * 0.61, y: height * 0.38 },
-    repo: { x: width * 0.35, y: height * 0.62 },
-    discussion: { x: width * 0.68, y: height * 0.69 },
-    blog: { x: width * 0.34, y: height * 0.32 },
-    cn_community: { x: width * 0.48, y: height * 0.71 },
-    other: { x: width * 0.52, y: height * 0.52 },
+    paper:        { x: W * 0.62, y: H * 0.42 },
+    repo:         { x: W * 0.28, y: H * 0.62 },
+    discussion:   { x: W * 0.70, y: H * 0.68 },
+    blog:         { x: W * 0.36, y: H * 0.28 },
+    cn_community: { x: W * 0.54, y: H * 0.76 },
+    other:        { x: W * 0.50, y: H * 0.50 },
   };
   const groups = new Map();
   for (const node of nodes) {
-    const group = graphGroup(node);
-    if (!groups.has(group)) groups.set(group, []);
-    groups.get(group).push(node);
+    const g = graphGroup(node);
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(node);
   }
-  for (const [group, groupNodes] of groups) {
-    const center = centers[group] || centers.other;
-    const spread = Math.min(Math.min(width, height) * 0.29, 62 + Math.sqrt(groupNodes.length) * 34);
-    groupNodes.sort((a, b) => (b.weight || 0) - (a.weight || 0));
-    groupNodes.forEach((node, index) => {
-      const jitter = hashValue(node.id) - 0.5;
-      const angle = index * 2.399963 + jitter * 0.9;
-      const radius = groupNodes.length <= 1 ? 0 : spread * Math.sqrt((index + 0.35) / groupNodes.length);
-      node.clusterX = center.x;
-      node.clusterY = center.y;
-      node.x = clampNumber(center.x + Math.cos(angle) * radius + jitter * 18, 34, width - 34);
-      node.y = clampNumber(center.y + Math.sin(angle) * radius - jitter * 14, 34, height - 34);
+  for (const [g, gNodes] of groups) {
+    const c = centers[g] || centers.other;
+    const spread = Math.min(Math.min(W, H) * 0.28, 60 + Math.sqrt(gNodes.length) * 34);
+    gNodes.sort((a, b) => (b.weight || 0) - (a.weight || 0));
+    gNodes.forEach((node, i) => {
+      const j = hashValue(node.id) - 0.5;
+      const angle = i * 2.399963 + j * 0.8;
+      const r = gNodes.length <= 1 ? 0 : spread * Math.sqrt((i + 0.35) / gNodes.length);
+      node.x = clampNumber(c.x + Math.cos(angle) * r + j * 18, 42, W - 42);
+      node.y = clampNumber(c.y + Math.sin(angle) * r + j * 12, 42, H - 42);
+      node.vx = (Math.random() - 0.5) * 2.0;
+      node.vy = (Math.random() - 0.5) * 2.0;
     });
-  }
-
-  for (let iteration = 0; iteration < 120; iteration += 1) {
-    for (let i = 0; i < nodes.length; i += 1) {
-      for (let j = i + 1; j < nodes.length; j += 1) {
-        const a = nodes[i];
-        const b = nodes[j];
-        const dx = b.x - a.x || 0.01;
-        const dy = b.y - a.y || 0.01;
-        const dist = Math.max(Math.hypot(dx, dy), 1);
-        const minDist = graphRadius(a) + graphRadius(b) + 18;
-        const force = dist < minDist ? ((minDist - dist) / dist) * 0.42 : 18 / (dist * dist);
-        a.x -= dx * force;
-        a.y -= dy * force;
-        b.x += dx * force;
-        b.y += dy * force;
-      }
-    }
-    for (const edge of edges) {
-      const a = edge.sourceNode;
-      const b = edge.targetNode;
-      const dx = b.x - a.x || 0.01;
-      const dy = b.y - a.y || 0.01;
-      const dist = Math.max(Math.hypot(dx, dy), 1);
-      const target = 82 + Math.max(0, 4 - Math.min(edge.weight || 1, 4)) * 12;
-      const force = (dist - target) * 0.0038 * Math.min(edge.weight || 1, 4);
-      a.x += dx * force;
-      a.y += dy * force;
-      b.x -= dx * force;
-      b.y -= dy * force;
-    }
-    for (const node of nodes) {
-      node.x += (node.clusterX - node.x) * 0.022;
-      node.y += (node.clusterY - node.y) * 0.022;
-      node.x = clampNumber(node.x, 34, width - 34);
-      node.y = clampNumber(node.y, 34, height - 34);
-    }
   }
 }
 
-function drawGraph(context, nodes, edges) {
-  const width = context.canvas.width;
-  const height = context.canvas.height;
-  context.clearRect(0, 0, width, height);
+// ── Graph: one frame of physics ──
+function tickGraphPhysics(canvas, nodes, edges) {
+  const W = state.graph.logW || canvas.width;
+  const H = state.graph.logH || canvas.height;
+  const cx = W * 0.5, cy = H * 0.5;
+  // Repulsion
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      const a = nodes[i], b = nodes[j];
+      const dx = b.x - a.x || 0.01, dy = b.y - a.y || 0.01;
+      const d2 = dx * dx + dy * dy, d = Math.sqrt(d2) || 0.1;
+      const min = graphRadius(a) + graphRadius(b) + 22;
+      const f = d < min ? (min - d) / d * 0.52 : 1100 / (d2 * d);
+      a.vx -= dx * f; a.vy -= dy * f;
+      b.vx += dx * f; b.vy += dy * f;
+    }
+  }
+  // Spring attraction along edges
+  for (const e of edges) {
+    const a = e.sourceNode, b = e.targetNode;
+    const dx = b.x - a.x || 0.01, dy = b.y - a.y || 0.01;
+    const d = Math.sqrt(dx * dx + dy * dy) || 0.1;
+    const target = 88 + Math.max(0, 5 - Math.min(e.weight || 1, 5)) * 11;
+    const f = (d - target) / d * 0.044;
+    a.vx += dx * f; a.vy += dy * f;
+    b.vx -= dx * f; b.vy -= dy * f;
+  }
+  // Center gravity + damping
+  for (const n of nodes) {
+    n.vx += (cx - n.x) * 0.0055;
+    n.vy += (cy - n.y) * 0.0055;
+    n.vx *= 0.85; n.vy *= 0.85;
+    n.x = clampNumber(n.x + n.vx, 42, W - 42);
+    n.y = clampNumber(n.y + n.vy, 42, H - 42);
+  }
+}
+
+// ── Graph: animation loop ──
+function startGraphAnimation(canvas) {
+  const ctx = canvas.getContext("2d");
+  function loop() {
+    const { nodes, edges } = state.graph;
+    if (!state.graph.settled) {
+      tickGraphPhysics(canvas, nodes, edges);
+      drawGraphEnhanced(ctx, canvas, nodes, edges);
+      if (++state.graph.tick >= 320) {
+        state.graph.settled = true;
+        drawGraphEnhanced(ctx, canvas, nodes, edges);
+        state.graph.animation = null;
+        return;
+      }
+    }
+    state.graph.animation = requestAnimationFrame(loop);
+  }
+  state.graph.animation = requestAnimationFrame(loop);
+}
+
+// ── Graph: enhanced renderer ──
+function drawGraphEnhanced(ctx, canvas, nodes, edges) {
+  const dpr = state.graph.dpr || 1;
+  const W = state.graph.logW || canvas.width;
+  const H = state.graph.logH || canvas.height;
+  ctx.save();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // HiDPI scale
+  // Fill dark background
+  ctx.fillStyle = "#0d1117";
+  ctx.fillRect(0, 0, W, H);
+
   if (!nodes.length) {
-    context.fillStyle = "#697386";
-    context.font = "16px system-ui, -apple-system, Segoe UI, sans-serif";
-    context.fillText("暂无可绘制的知识图谱：先打开、收藏或追问一些条目。", 28, 48);
+    ctx.fillStyle = "rgba(148,163,184,.55)";
+    ctx.font = "14px system-ui, -apple-system, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("暂无图谱数据：先打开、收藏或追问一些条目。", W / 2, H / 2);
+    ctx.restore();
     return;
   }
 
   const activeId = state.graph.activeNode && state.graph.activeNode.id;
-  const activeNeighbors = new Set();
+  const nbSet = new Set();
   if (activeId) {
-    activeNeighbors.add(activeId);
-    for (const edge of edges) {
-      if (edge.sourceNode.id === activeId) activeNeighbors.add(edge.targetNode.id);
-      if (edge.targetNode.id === activeId) activeNeighbors.add(edge.sourceNode.id);
+    nbSet.add(activeId);
+    for (const e of edges) {
+      if (e.sourceNode.id === activeId) nbSet.add(e.targetNode.id);
+      if (e.targetNode.id === activeId) nbSet.add(e.sourceNode.id);
     }
   }
 
-  context.save();
-  context.lineCap = "round";
-  for (const edge of [...edges].sort((a, b) => (a.weight || 0) - (b.weight || 0))) {
-    const active = activeId && (edge.sourceNode.id === activeId || edge.targetNode.id === activeId);
-    const dim = activeId && !active;
-    context.beginPath();
-    context.moveTo(edge.sourceNode.x, edge.sourceNode.y);
-    context.lineTo(edge.targetNode.x, edge.targetNode.y);
-    context.strokeStyle = active
-      ? "rgba(92, 86, 130, 0.42)"
-      : `rgba(88, 104, 103, ${dim ? 0.035 : Math.min(0.22, 0.04 + (edge.weight || 1) * 0.035)})`;
-    context.lineWidth = active ? Math.min(3.4, 1.1 + (edge.weight || 1) * 0.28) : Math.min(2.1, 0.45 + (edge.weight || 1) * 0.14);
-    context.stroke();
+  // Draw edges — curved bezier
+  ctx.save();
+  ctx.lineCap = "round";
+  for (const e of edges) {
+    const a = e.sourceNode, b = e.targetNode;
+    const isActive = activeId && (a.id === activeId || b.id === activeId);
+    const dim = activeId && !nbSet.has(a.id) && !nbSet.has(b.id);
+    const w = Math.min(e.weight || 1, 5);
+    const alpha = dim ? 0.025 : isActive ? 0.65 : 0.055 + w * 0.04;
+    const mx = (a.x + b.x) / 2 + (b.y - a.y) * 0.09;
+    const my = (a.y + b.y) / 2 - (b.x - a.x) * 0.09;
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = isActive ? "#2dd4bf" : "#94a3b8";
+    ctx.lineWidth = isActive ? Math.min(2.8, 1 + w * 0.28) : Math.min(1.6, 0.4 + w * 0.15);
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.quadraticCurveTo(mx, my, b.x, b.y);
+    ctx.stroke();
   }
+  ctx.globalAlpha = 1;
+  ctx.restore();
 
-  const orderedNodes = [...nodes].sort((a, b) => {
+  // Draw nodes — sorted so active is on top
+  const sorted = [...nodes].sort((a, b) => {
     if (a.id === activeId) return 1;
     if (b.id === activeId) return -1;
     return (a.weight || 0) - (b.weight || 0);
   });
-  for (const node of orderedNodes) {
-    const active = activeId === node.id;
-    const neighbor = activeNeighbors.has(node.id);
-    const dim = activeId && !active && !neighbor;
-    const radius = graphRadius(node);
-    context.beginPath();
-    context.arc(node.x, node.y, radius, 0, Math.PI * 2);
-    context.fillStyle = active ? "#7c3f76" : graphColor(node.source_type);
-    context.globalAlpha = dim ? 0.28 : active ? 0.94 : 0.78;
-    context.fill();
-    context.globalAlpha = 1;
-    context.lineWidth = 1;
-    context.strokeStyle = "rgba(255, 255, 255, 0.78)";
-    context.stroke();
-    if (active) {
-      context.lineWidth = 4;
-      context.strokeStyle = "rgba(124, 63, 118, 0.35)";
-      context.stroke();
+  for (const node of sorted) {
+    const isActive = node.id === activeId;
+    const isNb = !isActive && nbSet.has(node.id);
+    const dim = activeId && !isActive && !isNb;
+    const r = graphRadius(node);
+
+    ctx.save();
+    ctx.globalAlpha = dim ? 0.2 : 1;
+
+    // Glow shadow
+    if (isActive) {
+      ctx.shadowColor = graphNodeGlow(node.source_type);
+      ctx.shadowBlur = 22;
+    } else if (isNb) {
+      ctx.shadowColor = graphNodeGlow(node.source_type);
+      ctx.shadowBlur = 10;
     }
-    const labelY = node.y - radius < 22 ? node.y + radius + 14 : node.y - radius - 10;
-    context.font = active ? "600 13px system-ui, -apple-system, Segoe UI, sans-serif" : "12px system-ui, -apple-system, Segoe UI, sans-serif";
-    context.textAlign = "center";
-    context.textBaseline = "middle";
-    context.lineWidth = 4;
-    context.strokeStyle = "rgba(255, 255, 255, 0.86)";
-    context.strokeText(node.label, node.x, labelY);
-    context.fillStyle = dim ? "rgba(24, 32, 42, 0.34)" : "#18202a";
-    context.fillText(node.label, node.x, labelY);
+
+    // Radial gradient fill
+    const grd = ctx.createRadialGradient(node.x - r * 0.32, node.y - r * 0.36, r * 0.05, node.x, node.y, r * 1.12);
+    grd.addColorStop(0,   graphNodeHi(node.source_type));
+    grd.addColorStop(0.6, graphNodeMid(node.source_type));
+    grd.addColorStop(1,   graphNodeLo(node.source_type));
+    ctx.beginPath();
+    ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = grd;
+    ctx.fill();
+
+    // White ring
+    ctx.lineWidth  = isActive ? 2.5 : isNb ? 2 : 1.5;
+    ctx.strokeStyle = isActive ? "rgba(255,255,255,.9)" : "rgba(255,255,255,.55)";
+    ctx.shadowBlur = 0;
+    ctx.stroke();
+
+    // Outer accent ring for active
+    if (isActive) {
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = graphNodeGlow(node.source_type);
+      ctx.globalAlpha = 0.35;
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, r + 5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+    ctx.restore();
+
+    // Label — pill background
+    if (!isActive && r < 11) continue;
+    const raw = node.label || "";
+    const maxLen = isActive ? 22 : 16;
+    const lbl = raw.length > maxLen ? raw.slice(0, maxLen - 1) + "…" : raw;
+    const labelY = node.y - r - 7;
+
+    ctx.save();
+    ctx.globalAlpha = dim ? 0.2 : 1;
+    const fs = isActive ? 12 : 11;
+    ctx.font = `${isActive ? 600 : 400} ${fs}px system-ui, -apple-system, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "bottom";
+    const tw = ctx.measureText(lbl).width;
+    const px = 6, py = 3;
+    const rx = node.x - tw / 2 - px;
+    const ry = labelY - fs - py;
+    const rw = tw + px * 2;
+    const rh = fs + py * 2;
+    // Pill bg
+    ctx.fillStyle = isActive ? "rgba(13,20,32,.9)" : "rgba(255,255,255,.82)";
+    ctx.shadowColor = "rgba(0,0,0,.18)";
+    ctx.shadowBlur = 5;
+    graphRoundRect(ctx, rx, ry, rw, rh, 5);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = isActive ? "#5eead4" : "#e2e8f0";
+    ctx.fillText(lbl, node.x, labelY);
+    ctx.restore();
   }
-  context.restore();
+
+  ctx.restore();
+}
+
+function graphRoundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.arcTo(x + w, y, x + w, y + r, r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+  ctx.lineTo(x + r, y + h);
+  ctx.arcTo(x, y + h, x, y + h - r, r);
+  ctx.lineTo(x, y + r);
+  ctx.arcTo(x, y, x + r, y, r);
+  ctx.closePath();
 }
 
 function graphRadius(node) {
-  return Math.max(9, Math.min(24, Number(node.weight || 14) / 1.65));
+  return Math.max(8, Math.min(22, Number(node.weight || 14) / 1.7));
 }
 
 function graphGroup(node) {
-  return ["paper", "repo", "discussion", "blog", "cn_community"].includes(node.source_type) ? node.source_type : "other";
+  return ["paper", "repo", "discussion", "blog", "cn_community"].includes(node.source_type)
+    ? node.source_type : "other";
 }
 
 function hashValue(value) {
   let hash = 0;
   const text = String(value || "");
-  for (let index = 0; index < text.length; index += 1) {
-    hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
-  }
+  for (let i = 0; i < text.length; i++) hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
   return (hash % 1000) / 1000;
 }
 
-function graphColor(type) {
-  if (type === "paper") return "#6e9690";
-  if (type === "repo") return "#6e855d";
-  if (type === "discussion") return "#8d919d";
-  if (type === "blog") return "#b5a06d";
-  if (type === "cn_community") return "#9a7c9c";
-  return "#8ba6a2";
+// Node colour ramps (hi / mid / lo / glow) on dark canvas
+function graphNodeHi(t) {
+  if (t === "paper")        return "#7dd3fc";
+  if (t === "repo")         return "#86efac";
+  if (t === "discussion")   return "#fde68a";
+  if (t === "blog")         return "#f9a8d4";
+  if (t === "cn_community") return "#c4b5fd";
+  return "#cbd5e1";
+}
+function graphNodeMid(t) {
+  if (t === "paper")        return "#0ea5e9";
+  if (t === "repo")         return "#22c55e";
+  if (t === "discussion")   return "#f59e0b";
+  if (t === "blog")         return "#ec4899";
+  if (t === "cn_community") return "#a78bfa";
+  return "#94a3b8";
+}
+function graphNodeLo(t) {
+  if (t === "paper")        return "#0369a1";
+  if (t === "repo")         return "#15803d";
+  if (t === "discussion")   return "#92400e";
+  if (t === "blog")         return "#9d174d";
+  if (t === "cn_community") return "#5b21b6";
+  return "#334155";
+}
+function graphNodeGlow(t) {
+  if (t === "paper")        return "rgba(14,165,233,.75)";
+  if (t === "repo")         return "rgba(34,197,94,.75)";
+  if (t === "discussion")   return "rgba(245,158,11,.75)";
+  if (t === "blog")         return "rgba(236,72,153,.75)";
+  if (t === "cn_community") return "rgba(167,139,250,.75)";
+  return "rgba(148,163,184,.6)";
 }
 
 function bindDeleteActions(container) {
