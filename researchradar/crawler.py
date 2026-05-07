@@ -114,6 +114,14 @@ class CrawlManager:
 
     async def run_config_source(self, source: dict, target: date) -> SourceRunOutcome:
         started = datetime.now(timezone.utc).isoformat()
+        if source.get("type") == "aihot" and self.db.source_run_exists(target, source["id"]):
+            return SourceRunOutcome(
+                source["id"],
+                0,
+                0,
+                "skipped",
+                "public snapshot already collected for this target date",
+            )
         try:
             result = await self.collector.collect_source(source, target)
         except Exception as exc:

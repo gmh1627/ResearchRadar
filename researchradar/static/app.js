@@ -35,6 +35,7 @@ const TYPE_LABELS = {
   repo: "代码",
   discussion: "讨论",
   cn_community: "中文源",
+  signal: "线索",
 };
 
 const STATUS_LABELS = {
@@ -60,6 +61,7 @@ const EVIDENCE_ROLE_LABELS = {
   cn_research_update: "中文研究动态",
   code_signal: "代码信号",
   engineering_discussion: "工程讨论",
+  curated_secondary_signal: "外部精选线索",
 };
 
 const DATE_KIND_LABELS = {
@@ -364,6 +366,7 @@ function pillClass(type) {
   if (type === "repo") return "repo";
   if (type === "discussion") return "discussion";
   if (type === "cn_community") return "cn";
+  if (type === "signal") return "signal";
   return "";
 }
 
@@ -408,12 +411,33 @@ function renderItemFacts(item) {
   return facts.map((fact) => `<span class="mini-fact">${escapeHtml(fact)}</span>`).join("");
 }
 
+function formatScore(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "";
+  return number <= 1 ? Math.round(number * 100) : Math.round(number);
+}
+
+function scoreClass(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "";
+  const normalized = number <= 1 ? number * 100 : number;
+  if (normalized >= 78) return "score-high";
+  if (normalized >= 62) return "score-mid";
+  return "score-muted";
+}
+
+function itemReason(item) {
+  return item.relevance_reason || (item.metadata && item.metadata.aihot_reason) || "";
+}
+
 function renderItem(item, mode = "radar") {
   const selected = state.selectedItem && state.selectedItem.id === item.id ? " selected" : "";
-  const score = item.score !== undefined ? `<span class="mini-fact">匹配 ${escapeHtml(item.score)}</span>` : "";
+  const scoreValue = formatScore(item.score);
+  const score = scoreValue !== "" ? `<span class="mini-fact score-pill ${scoreClass(item.score)}">分 ${escapeHtml(scoreValue)}</span>` : "";
   const tags = visibleTags(item.tags).slice(0, 6).map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("");
   const summary = item.display_summary || item.summary_zh || "中文摘要生成中，请稍后刷新。";
   const facts = renderItemFacts(item);
+  const reason = itemReason(item);
   return `
     <article class="item-card${selected}" data-id="${escapeHtml(item.id)}" data-type="${escapeHtml(item.source_type || "")}" tabindex="0">
       <div class="item-meta">
@@ -426,6 +450,7 @@ function renderItem(item, mode = "radar") {
       <h3>${escapeHtml(item.title)}</h3>
       <p class="rich-text">${renderRichText(summary, mode === "digest" ? 260 : 320)}</p>
       <div class="tags">${tags}</div>
+      ${reason ? `<div class="item-reason"><span>推荐理由</span>${escapeHtml(truncate(reason, 170))}</div>` : ""}
     </article>
   `;
 }
@@ -480,8 +505,48 @@ function selectItem(item) {
 
 function renderDetailReasons(item) {
   const target = $("detailReasons");
-  target.classList.add("hidden");
-  target.innerHTML = "";
+  const rows = [];
+  if (item.relevance_reason) {
+    rows.push(["推荐理由", item.relevance_reason]);
+  }
+  if (item.recommended_action) {
+    rows.push(["建议动作", item.recommended_action]);
+  }
+  if (item.score_parts && Object.keys(item.score_parts).length) {
+    rows.push(["评分拆解", scorePartsText(item.score_parts)]);
+  }
+  if (!rows.length) {
+    target.classList.add("hidden");
+    target.innerHTML = "";
+    return;
+  }
+  target.classList.remove("hidden");
+  target.innerHTML = rows
+    .map(([label, value]) => `
+      <div>
+        <span>${escapeHtml(label)}</span>
+        <p>${escapeHtml(value)}</p>
+      </div>
+    `)
+    .join("");
+}
+
+function scorePartsText(parts) {
+  const labels = {
+    relevance: "相关",
+    credibility: "可信",
+    novelty: "新颖",
+    significance: "重要",
+    actionability: "可行动",
+    trend: "趋势",
+    research_value: "研究价值",
+    personalization: "个性化",
+    recency: "新鲜",
+  };
+  return Object.entries(labels)
+    .filter(([key]) => parts[key] !== undefined)
+    .map(([key, label]) => `${label} ${formatScore(parts[key])}`)
+    .join(" · ");
 }
 
 function renderDetailFacts(item) {
@@ -490,7 +555,10 @@ function renderDetailFacts(item) {
   facts.push(["日期", formatItemDate(item, "full")]);
   if (item.source_reliability) facts.push(["可信度", RELIABILITY_LABELS[item.source_reliability] || item.source_reliability]);
   if (item.evidence_role) facts.push(["证据角色", EVIDENCE_ROLE_LABELS[item.evidence_role] || item.evidence_role]);
-  if (item.score !== undefined) facts.push(["匹配分", item.score]);
+  if (item.source_tier) facts.push(["信源等级", item.source_tier]);
+  if (item.score !== undefined && item.score !== null) facts.push(["质量分", formatScore(item.score)]);
+  if (meta.aihot_score !== undefined && meta.aihot_score !== null) facts.push(["AIHOT 分", meta.aihot_score]);
+  if (meta.aihot_origin_source) facts.push(["AIHOT 原始来源", meta.aihot_origin_source]);
   if (item.authors && item.authors.length) facts.push(["作者", item.authors.slice(0, 6).join("、")]);
   if (item.categories && item.categories.length) facts.push(["分类", item.categories.slice(0, 6).join(" / ")]);
   if (meta.arxiv_id) facts.push(["arXiv ID", meta.arxiv_id]);
@@ -1235,7 +1303,7 @@ function graphRadius(node) {
 }
 
 function graphGroup(node) {
-  return ["paper", "repo", "discussion", "blog", "cn_community"].includes(node.source_type)
+  return ["paper", "repo", "discussion", "blog", "cn_community", "signal"].includes(node.source_type)
     ? node.source_type : "other";
 }
 
@@ -1253,6 +1321,7 @@ function graphNodeHi(t) {
   if (t === "discussion")   return "#fde68a";
   if (t === "blog")         return "#f9a8d4";
   if (t === "cn_community") return "#c4b5fd";
+  if (t === "signal") return "#67e8f9";
   return "#cbd5e1";
 }
 function graphNodeMid(t) {
@@ -1261,6 +1330,7 @@ function graphNodeMid(t) {
   if (t === "discussion")   return "#f59e0b";
   if (t === "blog")         return "#ec4899";
   if (t === "cn_community") return "#a78bfa";
+  if (t === "signal") return "#06b6d4";
   return "#94a3b8";
 }
 function graphNodeLo(t) {
@@ -1269,6 +1339,7 @@ function graphNodeLo(t) {
   if (t === "discussion")   return "#92400e";
   if (t === "blog")         return "#9d174d";
   if (t === "cn_community") return "#5b21b6";
+  if (t === "signal") return "#155e75";
   return "#334155";
 }
 function graphNodeGlow(t) {
@@ -1277,6 +1348,7 @@ function graphNodeGlow(t) {
   if (t === "discussion")   return "rgba(245,158,11,.75)";
   if (t === "blog")         return "rgba(236,72,153,.75)";
   if (t === "cn_community") return "rgba(167,139,250,.75)";
+  if (t === "signal") return "rgba(6,182,212,.75)";
   return "rgba(148,163,184,.6)";
 }
 

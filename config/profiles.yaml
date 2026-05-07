@@ -36,6 +36,7 @@ profiles:
       - "huggingface_blog"
       - "github"
       - "hackernews"
+      - "aihot_public"
     digest_language: "zh-CN"
     technical_depth: "high"
     include_code_links: true

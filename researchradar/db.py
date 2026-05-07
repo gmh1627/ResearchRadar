@@ -46,6 +46,11 @@ class Database:
                     last_seen_at TEXT,
                     source_reliability TEXT,
                     evidence_role TEXT,
+                    source_tier TEXT,
+                    quality_score REAL,
+                    score_parts_json TEXT NOT NULL DEFAULT '{}',
+                    relevance_reason TEXT,
+                    recommended_action TEXT,
                     metadata_json TEXT NOT NULL DEFAULT '{}',
                     search_text TEXT NOT NULL
                 );
@@ -158,6 +163,11 @@ class Database:
             )
             ensure_column(conn, "items", "summary_zh", "TEXT")
             ensure_column(conn, "items", "last_seen_at", "TEXT")
+            ensure_column(conn, "items", "source_tier", "TEXT")
+            ensure_column(conn, "items", "quality_score", "REAL")
+            ensure_column(conn, "items", "score_parts_json", "TEXT NOT NULL DEFAULT '{}'")
+            ensure_column(conn, "items", "relevance_reason", "TEXT")
+            ensure_column(conn, "items", "recommended_action", "TEXT")
             conn.execute(
                 """
                 UPDATE items
@@ -181,14 +191,16 @@ class Database:
                 INSERT INTO items (
                     id, source_id, source_name, source_type, title, url, summary, summary_zh,
                     authors_json, categories_json, tags_json, published_at,
-                    collected_at, last_seen_at, source_reliability, evidence_role, metadata_json,
-                    search_text
+                    collected_at, last_seen_at, source_reliability, evidence_role, source_tier,
+                    quality_score, score_parts_json, relevance_reason, recommended_action,
+                    metadata_json, search_text
                 )
                 VALUES (
                     :id, :source_id, :source_name, :source_type, :title, :url, :summary, :summary_zh,
                     :authors_json, :categories_json, :tags_json, :published_at,
-                    :collected_at, :last_seen_at, :source_reliability, :evidence_role, :metadata_json,
-                    :search_text
+                    :collected_at, :last_seen_at, :source_reliability, :evidence_role, :source_tier,
+                    :quality_score, :score_parts_json, :relevance_reason, :recommended_action,
+                    :metadata_json, :search_text
                 )
                 ON CONFLICT(id) DO UPDATE SET
                     title=excluded.title,
@@ -196,6 +208,7 @@ class Database:
                     summary_zh=COALESCE(NULLIF(items.summary_zh, ''), excluded.summary_zh),
                     tags_json=excluded.tags_json,
                     categories_json=excluded.categories_json,
+                    source_tier=COALESCE(excluded.source_tier, items.source_tier),
                     metadata_json=excluded.metadata_json,
                     last_seen_at=excluded.last_seen_at,
                     search_text=excluded.search_text
@@ -328,6 +341,27 @@ class Database:
                 (target_date.isoformat(), source_id, status, started_at, finished_at, items_found, error),
             )
 
+    def source_run_exists(
+        self,
+        target_date: date,
+        source_id: str,
+        statuses: tuple[str, ...] = ("success", "partial"),
+    ) -> bool:
+        if not statuses:
+            return False
+        placeholders = ", ".join("?" for _ in statuses)
+        with self.connect() as conn:
+            row = conn.execute(
+                f"""
+                SELECT 1
+                FROM source_runs
+                WHERE target_date=? AND source_id=? AND status IN ({placeholders})
+                LIMIT 1
+                """,
+                [target_date.isoformat(), source_id, *statuses],
+            ).fetchone()
+        return row is not None
+
     def successful_days(self) -> set[str]:
         with self.connect() as conn:
             rows = conn.execute("SELECT target_date FROM crawl_days WHERE status='success'").fetchall()
@@ -425,6 +459,33 @@ class Database:
         with self.connect() as conn:
             row = conn.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone()
         return decode_item(row) if row else None
+
+    def update_item_scores(self, items: Iterable[dict[str, Any]]) -> None:
+        rows = []
+        for item in items:
+            item_id = item.get("id")
+            if not item_id:
+                continue
+            rows.append(
+                (
+                    item.get("quality_score", item.get("score")),
+                    json.dumps(item.get("score_parts") or {}, ensure_ascii=False),
+                    item.get("relevance_reason"),
+                    item.get("recommended_action"),
+                    item_id,
+                )
+            )
+        if not rows:
+            return
+        with self.connect() as conn:
+            conn.executemany(
+                """
+                UPDATE items
+                SET quality_score=?, score_parts_json=?, relevance_reason=?, recommended_action=?
+                WHERE id=?
+                """,
+                rows,
+            )
 
     def feedback_for_user(self, user_id: str) -> dict[str, list[str]]:
         with self.connect() as conn:
@@ -878,6 +939,7 @@ def decode_item(row: sqlite3.Row) -> dict[str, Any]:
     item["authors"] = json.loads(item.pop("authors_json") or "[]")
     item["categories"] = json.loads(item.pop("categories_json") or "[]")
     item["tags"] = json.loads(item.pop("tags_json") or "[]")
+    item["score_parts"] = json.loads(item.pop("score_parts_json", "{}") or "{}")
     item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
     return item
 
@@ -900,8 +962,8 @@ def content_fingerprint(item: dict[str, Any]) -> str:
     if source_id == "arxiv_core":
         arxiv_id = str(metadata.get("arxiv_id") or "").strip().lower()
         return f"arxiv:{arxiv_id or url or title}"
-    if source_type in {"blog", "discussion", "cn_community"}:
-        return f"text:{title}"
+    if source_type in {"blog", "discussion", "cn_community", "signal"}:
+        return f"url:{url}" if url else f"text:{title}"
     if url:
         return f"url:{url}"
     return f"text:{title}"

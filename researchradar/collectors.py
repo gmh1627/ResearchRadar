@@ -6,9 +6,10 @@ import re
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from datetime import date, datetime, time as dt_time, timezone
+from datetime import date, datetime, time as dt_time, timedelta, timezone
 from typing import Any
 from urllib.parse import quote_plus, urljoin
+from zoneinfo import ZoneInfo
 
 import httpx
 from bs4 import BeautifulSoup
@@ -41,6 +42,7 @@ class Collector:
         self.timeout = float(crawl.get("request_timeout_seconds", 25))
         self.max_items = int(crawl.get("max_items_per_source", 80))
         self.user_agent = str(crawl.get("user_agent", "ResearchRadar/0.1"))
+        self.timezone = str(crawl.get("timezone", "Asia/Shanghai"))
         self.arxiv_page_size = int(crawl.get("arxiv_page_size", 200))
         self.arxiv_max_results = int(crawl.get("arxiv_max_results_per_run", 1500))
         self.github = settings.get("github", {})
@@ -58,6 +60,8 @@ class Collector:
                 items = await self.collect_rss(source, target)
             elif kind == "page":
                 items = await self.collect_page(source, target)
+            elif kind == "aihot":
+                items = await self.collect_aihot_public(source, target)
             else:
                 return CollectResult(source_id, "error", [], f"unknown source type: {kind}")
             return CollectResult(source_id, "success", items)
@@ -104,6 +108,7 @@ class Collector:
                 "rank_source": "github_daily_rank",
                 "rank_date": day_label,
                 "rank_position": table_row.get("rank"),
+                "source_tier": "T2",
             }
             items.append(
                 self.make_item(
@@ -148,6 +153,7 @@ class Collector:
                 "daily_stars": parse_count(today_match.group(1)) if today_match else None,
                 "rank_source": "github_trending",
                 "rank_date": target.isoformat(),
+                "source_tier": "T2",
             }
             items.append(
                 self.make_item(
@@ -213,6 +219,7 @@ class Collector:
                                 "comments": hit.get("num_comments"),
                                 "keyword": keyword,
                                 "hn_url": f"https://news.ycombinator.com/item?id={hit.get('objectID')}",
+                                "source_tier": "T2",
                             },
                         )
                     )
@@ -322,7 +329,7 @@ class Collector:
                     categories=categories,
                     source_reliability=source.get("reliability", "high"),
                     evidence_role=source.get("evidence_role", "primary_research"),
-                    metadata={"arxiv_id": arxiv_id, "pdf_url": pdf_url},
+                    metadata={"arxiv_id": arxiv_id, "pdf_url": pdf_url, "source_tier": source.get("tier")},
                 )
             )
         return out
@@ -371,6 +378,7 @@ class Collector:
                             "arxiv_id": arxiv_id,
                             "pdf_url": canonical_url(urljoin("https://arxiv.org", pdf_link["href"])) if pdf_link else "",
                             "fallback_source": "pastweek_page",
+                            "source_tier": source.get("tier"),
                         },
                     )
                 )
@@ -399,7 +407,7 @@ class Collector:
                     categories=[],
                     source_reliability=source.get("reliability", "high"),
                     evidence_role=source.get("evidence_role", "official_update"),
-                    metadata={"feed_url": source["url"]},
+                    metadata={"feed_url": source["url"], "source_tier": source.get("tier")},
                 )
             )
         return dedupe_items(items)[: self.max_items]
@@ -445,9 +453,91 @@ class Collector:
                     categories=[],
                     source_reliability=source.get("reliability", "medium"),
                     evidence_role=source.get("evidence_role", "official_update"),
-                    metadata={"page_url": source["url"], "undated": published is None},
+                    metadata={"page_url": source["url"], "undated": published is None, "source_tier": source.get("tier")},
                 )
             )
+            if len(items) >= self.max_items:
+                break
+        return dedupe_items(items)
+
+    async def collect_aihot_public(self, source: dict[str, Any], target: date) -> list[dict[str, Any]]:
+        # AIHOT's public robots.txt allows the public list pages and asks crawlers
+        # to stay off /api and parameterized pages. Treat it as a low-frequency
+        # curated secondary signal rather than a primary source.
+        local_today = datetime.now(ZoneInfo(self.timezone)).date()
+        if target < local_today - timedelta(days=1):
+            return []
+
+        url = source.get("url") or "https://aihot.virxact.com/"
+        async with self.client() as client:
+            response = await client.get(url)
+            response.raise_for_status()
+        return self.parse_aihot_timeline(response.text, source, url)
+
+    def parse_aihot_timeline(self, html_text: str, source: dict[str, Any], page_url: str) -> list[dict[str, Any]]:
+        soup = BeautifulSoup(html_text, "html.parser")
+        tz = ZoneInfo(self.timezone)
+        current_year = datetime.now(tz).year
+        items: list[dict[str, Any]] = []
+        for day_block in soup.select(".timeline-day"):
+            date_label = text_or_none(day_block.select_one(".timeline-date")) or ""
+            for row in day_block.select(".timeline-item"):
+                article = row.select_one("article.timeline-card")
+                if not article:
+                    continue
+                link = article.select_one("a.timeline-title[href], a.uc-body[href], a[href^='http']")
+                if not link or not link.get("href"):
+                    continue
+                item_url = canonical_url(link["href"])
+                if not item_url.startswith(("http://", "https://")):
+                    continue
+                raw_title = normalize_title(link.get_text(" ", strip=True))
+                summary = strip_html(text_or_none(article.select_one(".timeline-summary")) or "", limit=1800)
+                if not summary and link.select_one(".uc-body-p"):
+                    summary = strip_html(link.get_text(" ", strip=True), limit=1800)
+                title = raw_title or summary[:120] or "AIHOT curated signal"
+                title = normalize_title(title)
+                if len(title) > 180:
+                    title = title[:177].rstrip() + "..."
+                origin_source = text_or_none(article.select_one(".timeline-source")) or "AIHOT"
+                origin_handle = text_or_none(article.select_one(".uc-handle")) or ""
+                score_text = text_or_none(article.select_one(".timeline-score")) or ""
+                reason = normalize_aihot_reason(text_or_none(article.select_one(".timeline-reason")) or "")
+                tags = [normalize_title(tag.get_text(" ", strip=True)) for tag in article.select(".timeline-tags .tag")]
+                tags = [tag for tag in tags if tag]
+                time_label = text_or_none(row.select_one(".timeline-time")) or ""
+                published = parse_aihot_datetime(date_label, time_label, current_year, tz)
+                metadata = {
+                    "aihot_page": page_url,
+                    "aihot_score": parse_count(score_text),
+                    "aihot_reason": reason,
+                    "aihot_tags": tags,
+                    "aihot_origin_source": origin_source,
+                    "aihot_origin_handle": origin_handle,
+                    "aihot_selected": "timeline-item-selected" in (row.get("class") or []),
+                    "external_url": item_url,
+                    "source_tier": source.get("tier"),
+                }
+                item = self.make_item(
+                    source_id=source["id"],
+                    source_name=f"AIHOT · {origin_source}",
+                    source_type=source.get("source_type", "signal"),
+                    title=title,
+                    url=item_url,
+                    summary=summary or title,
+                    published_at=published,
+                    authors=[origin_handle.lstrip("@")] if origin_handle else [],
+                    categories=[],
+                    source_reliability=source.get("reliability", "medium"),
+                    evidence_role=source.get("evidence_role", "curated_secondary_signal"),
+                    metadata=metadata,
+                    extra_tags=["AIHOT线索", *tags],
+                )
+                if contains_cjk(item["summary"]):
+                    item["summary_zh"] = item["summary"]
+                items.append(item)
+                if len(items) >= self.max_items:
+                    break
             if len(items) >= self.max_items:
                 break
         return dedupe_items(items)
@@ -467,11 +557,12 @@ class Collector:
         source_reliability: str,
         evidence_role: str,
         metadata: dict[str, Any],
+        extra_tags: list[str] | None = None,
     ) -> dict[str, Any]:
         url = canonical_url(url)
         title = normalize_title(title)
         summary = strip_html(summary, limit=2200)
-        tags = extract_tags(title, summary, categories)
+        tags = list(dict.fromkeys(extract_tags(title, summary, categories) + list(extra_tags or [])))[:16]
         item_id = stable_id(source_id, metadata.get("arxiv_id") or url or title)
         search_text = f"{title}\n{summary}\n{' '.join(tags)}\n{' '.join(categories)}".lower()
         seen_at = isoformat(now_utc())
@@ -492,6 +583,11 @@ class Collector:
             "last_seen_at": seen_at,
             "source_reliability": source_reliability,
             "evidence_role": evidence_role,
+            "source_tier": metadata.get("source_tier"),
+            "quality_score": None,
+            "score_parts_json": "{}",
+            "relevance_reason": "",
+            "recommended_action": "",
             "metadata_json": json.dumps(metadata or {}, ensure_ascii=False),
             "search_text": search_text,
         }
@@ -627,6 +723,34 @@ def parse_count(value: str | None) -> int | None:
     suffix = match.group(2)
     multiplier = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}.get(suffix, 1)
     return int(number * multiplier)
+
+
+def parse_aihot_datetime(date_label: str, time_label: str, year: int, tz: ZoneInfo) -> datetime | None:
+    date_match = re.search(r"(\d{1,2})\s*月\s*(\d{1,2})\s*日", date_label or "")
+    time_match = re.search(r"(\d{1,2}):(\d{2})", time_label or "")
+    if not date_match:
+        return None
+    month = int(date_match.group(1))
+    day = int(date_match.group(2))
+    hour = int(time_match.group(1)) if time_match else 8
+    minute = int(time_match.group(2)) if time_match else 0
+    try:
+        dt = datetime(year, month, day, hour, minute, tzinfo=tz)
+    except ValueError:
+        return None
+    now = datetime.now(tz)
+    if dt > now + timedelta(days=30):
+        dt = dt.replace(year=year - 1)
+    return dt.astimezone(timezone.utc)
+
+
+def normalize_aihot_reason(value: str) -> str:
+    text = normalize_title(value)
+    return re.sub(r"^推荐理由[:：]\s*", "", text).strip()
+
+
+def contains_cjk(value: str) -> bool:
+    return bool(re.search(r"[\u4e00-\u9fff]", value or ""))
 
 
 def text_or_none(element) -> str | None:

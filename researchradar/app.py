@@ -48,6 +48,11 @@ DIGEST_SECTIONS = [
         "description": "Hacker News 等社区讨论，主要看真实反馈、质疑和替代方案。",
     },
     {
+        "key": "signals",
+        "label": "外部精选线索",
+        "description": "AIHOT 等外部精选流，作为发现 X / KOL / 媒体早期信号的二级入口。",
+    },
+    {
         "key": "other",
         "label": "其他值得扫读",
         "description": "暂不属于以上类别，但仍有一定相关性的近期条目。",
@@ -234,6 +239,7 @@ async def digest(user_id: str = "default", days: int = 7, limit: int | None = No
         }
     rows, _ = db.query_items(days=days, limit=max(500, max_items * 12))
     ranked = rank_items(rows, profile, db.feedback_for_user(user_id), db.feedback_signals_for_user(user_id))
+    db.update_item_scores(ranked)
     min_per_section = int(config.settings.get("ranking", {}).get("digest_min_items_per_section", 4))
     sent_fingerprints = db.sent_digest_fingerprints(user_id)
     selected = select_digest_items(
@@ -559,6 +565,8 @@ def digest_section_key(item: dict[str, Any]) -> str:
         return "code_tools"
     if source_id == "hackernews" or source_type == "discussion" or evidence_role == "engineering_discussion":
         return "discussions"
+    if source_id == "aihot_public" or source_type == "signal" or evidence_role == "curated_secondary_signal":
+        return "signals"
     if source_type in {"blog", "cn_community"} or evidence_role in {"official_update", "lab_update", "cn_research_update"}:
         return "official_updates"
     return "other"
@@ -568,9 +576,9 @@ def digest_item_fingerprint(item: dict[str, Any]) -> str:
     title = re.sub(r"\s+", " ", str(item.get("title") or "").strip().lower())
     source_type = str(item.get("source_type") or "")
     source_id = str(item.get("source_id") or "")
-    if source_type in {"blog", "discussion", "cn_community"}:
-        return f"title:{title}"
     url = canonical_digest_url(item.get("url"))
+    if source_type in {"blog", "discussion", "cn_community", "signal"}:
+        return f"url:{url}" if url else f"title:{title}"
     if source_id == "github" and url:
         return f"github:{url}"
     if url:
@@ -613,6 +621,7 @@ def with_display_summary(item: dict[str, Any]) -> dict[str, Any]:
     date_kind = infer_date_kind(item)
     return {
         **item,
+        "score": item.get("quality_score"),
         "tags": visible_tags(item.get("tags", [])),
         "display_summary": summary_zh,
         "date_kind": date_kind,
@@ -652,6 +661,7 @@ def build_evidence_links(item: dict[str, Any]) -> list[dict[str, str]]:
         "cn_community": "来源",
     }.get(item.get("source_type"), "来源")
     add(source_label, item.get("url"))
+    add("AIHOT 页", metadata.get("aihot_page"))
     add("PDF", metadata.get("pdf_url"))
     if metadata.get("arxiv_id"):
         add("arXiv", f"https://arxiv.org/abs/{metadata['arxiv_id']}")

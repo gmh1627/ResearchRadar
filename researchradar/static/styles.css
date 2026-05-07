@@ -22,6 +22,7 @@
   --disc-fg:   #b45309; --disc-bg:   #fef3c7; --disc-dot:   #fbbf24;
   --cn-fg:     #6d28d9; --cn-bg:     #ede9fe; --cn-dot:     #a78bfa;
   --blog-fg:   #be185d; --blog-bg:   #fce7f3; --blog-dot:   #f472b6;
+  --signal-fg: #0e7490; --signal-bg: #cffafe; --signal-dot: #22d3ee;
 
   /* ── Sidebar ─────────────────────────────── */
   --sb-bg:     #0c0a09;
@@ -283,6 +284,7 @@ textarea { resize: vertical; }
 .item-card[data-type="discussion"]   { border-left-color: var(--disc-dot);  background: linear-gradient(to right, #fffbeb 0%, #fff 40%); }
 .item-card[data-type="cn_community"] { border-left-color: var(--cn-dot);    background: linear-gradient(to right, #faf5ff 0%, #fff 40%); }
 .item-card[data-type="blog"]         { border-left-color: var(--blog-dot);  background: linear-gradient(to right, #fdf2f8 0%, #fff 40%); }
+.item-card[data-type="signal"]       { border-left-color: var(--signal-dot); background: linear-gradient(to right, #ecfeff 0%, #fff 40%); }
 .item-card:hover {
   border-color: var(--accent); border-left-color: var(--accent);
   box-shadow: var(--sh-md); transform: translateY(-1px);
@@ -307,6 +309,7 @@ textarea { resize: vertical; }
 .pill.repo       { background: var(--repo-bg);  color: var(--repo-fg);  }
 .pill.discussion { background: var(--disc-bg);  color: var(--disc-fg);  }
 .pill.cn         { background: var(--cn-bg);    color: var(--cn-fg);    }
+.pill.signal     { background: var(--signal-bg); color: var(--signal-fg); }
 .pill.status-success { background: var(--repo-bg);  color: var(--repo-fg);  }
 .pill.status-partial { background: var(--disc-bg);  color: var(--disc-fg);  }
 .pill.status-error   { background: #fee2e2; color: #b91c1c; }
@@ -320,6 +323,10 @@ textarea { resize: vertical; }
   border: 1px solid var(--line-2); border-radius: 999px;
   color: var(--muted); padding: 1px 6px; font-size: 11.5px; background: #f5f5f4;
 }
+.score-pill { font-weight: 800; border-color: transparent; }
+.score-high { background: #dcfce7; color: #15803d; }
+.score-mid { background: #fef3c7; color: #b45309; }
+.score-muted { background: #f5f5f4; color: #78716c; }
 
 /* ── Card title/body ─────────────────────────── */
 .item-card h3 {
@@ -327,6 +334,16 @@ textarea { resize: vertical; }
   color: var(--ink); letter-spacing: -.015em;
 }
 .item-card p { margin: 0; color: #44403c; font-size: 13px; line-height: 1.56; }
+.item-reason {
+  margin-top: 9px; padding: 8px 10px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-2); font-size: 12.5px; line-height: 1.45;
+  background: rgba(250,250,249,.72); border-radius: 0 0 var(--r-sm) var(--r-sm);
+}
+.item-reason span {
+  color: var(--accent-dark); font-size: 10.5px; font-weight: 800;
+  letter-spacing: .06em; text-transform: uppercase; margin-right: 7px;
+}
 
 /* ── Tags on card ────────────────────────────── */
 .tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
