@@ -65,7 +65,7 @@ HIDDEN_DISPLAY_TAGS = {"rag"}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.initialize()
-    asyncio.create_task(crawler.catch_up())
+    db.mark_interrupted_crawl_days()
     asyncio.create_task(crawler.scheduler_loop())
     yield
 
@@ -167,7 +167,7 @@ async def items(
     tag: str = "",
     limit: int = 80,
     offset: int = 0,
-    translate_limit: int = 30,
+    translate_limit: int = 0,
 ):
     if item_date:
         validate_item_date(item_date)
@@ -212,7 +212,6 @@ async def item_detail(item_id: str, user_id: str = "default"):
     if not item:
         raise HTTPException(status_code=404, detail="item not found")
     db.record_item_view(user_id, item_id)
-    await ensure_translations([item], max_count=1)
     return with_display_summary(item)
 
 
@@ -226,7 +225,6 @@ async def digest(user_id: str = "default", days: int = 7, limit: int | None = No
     existing_run = db.get_digest_run(user_id, run_date, days, max_items)
     if existing_run:
         existing_rows = existing_run["items"]
-        await ensure_translations(existing_rows, max_count=min(max_items, 60))
         existing_items = [with_display_summary(row) for row in existing_rows]
         sections = build_digest_sections(existing_items)
         return {
@@ -248,7 +246,6 @@ async def digest(user_id: str = "default", days: int = 7, limit: int | None = No
         min_per_section=min_per_section,
         excluded_fingerprints=sent_fingerprints,
     )
-    await ensure_translations(selected, max_count=min(max_items, 60))
     selected = [with_display_summary(row) for row in selected]
     db.create_digest_run(
         user_id=user_id,
@@ -277,7 +274,7 @@ async def crawl(req: CrawlRequest, background: BackgroundTasks):
     days = max(1, min(req.days, 31))
     end = datetime.now(timezone.utc).date()
     start = end - timedelta(days=days - 1)
-    background.add_task(crawler.crawl_range, start, end)
+    background.add_task(crawler.crawl_range, start, end, run_postprocess=True)
     return {"accepted": True, "start": start.isoformat(), "end": end.isoformat(), "crawler": crawler.status}
 
 

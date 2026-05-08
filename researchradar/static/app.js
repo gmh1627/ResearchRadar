@@ -42,6 +42,7 @@ const STATUS_LABELS = {
   success: "成功",
   partial: "部分成功",
   running: "运行中",
+  interrupted: "已中断",
   skipped: "已跳过",
   waiting: "等待中",
   error: "错误",
@@ -534,6 +535,11 @@ function renderDetailReasons(item) {
 function scorePartsText(parts) {
   const labels = {
     relevance: "相关",
+    llm_relevance: "GPT相关",
+    llm_novelty: "GPT新颖",
+    llm_significance: "GPT重要",
+    llm_actionability: "GPT可行动",
+    llm_credibility: "GPT可信",
     credibility: "可信",
     novelty: "新颖",
     significance: "重要",
@@ -558,6 +564,7 @@ function renderDetailFacts(item) {
   if (item.source_tier) facts.push(["信源等级", item.source_tier]);
   if (item.score !== undefined && item.score !== null) facts.push(["质量分", formatScore(item.score)]);
   if (meta.aihot_score !== undefined && meta.aihot_score !== null) facts.push(["AIHOT 分", meta.aihot_score]);
+  if (meta.aihot_category_label) facts.push(["AIHOT 分类", meta.aihot_category_label]);
   if (meta.aihot_origin_source) facts.push(["AIHOT 原始来源", meta.aihot_origin_source]);
   if (item.authors && item.authors.length) facts.push(["作者", item.authors.slice(0, 6).join("、")]);
   if (item.categories && item.categories.length) facts.push(["分类", item.categories.slice(0, 6).join(" / ")]);
@@ -697,7 +704,7 @@ async function loadArxiv(options = {}) {
     const q = encodeURIComponent(state.search || "");
     const offset = append ? page.items.length : 0;
     const data = await api(
-      `/api/items?source_id=arxiv_core&date=${encodeURIComponent(state.arxivDate)}&q=${q}&limit=${PAGE_SIZE}&offset=${offset}&translate_limit=50`
+      `/api/items?source_id=arxiv_core&date=${encodeURIComponent(state.arxivDate)}&q=${q}&limit=${PAGE_SIZE}&offset=${offset}`
     );
     page.total = data.total;
     page.items = append ? page.items.concat(data.items) : data.items;
@@ -775,7 +782,7 @@ async function loadBlogs(options = {}) {
     const q = encodeURIComponent(state.search || "");
     const offset = append ? page.items.length : 0;
     const data = await api(
-      `/api/items?source_type=blog%2Ccn_community&date=${encodeURIComponent(state.blogDate)}&q=${q}&limit=${PAGE_SIZE}&offset=${offset}&translate_limit=50`
+      `/api/items?source_type=blog%2Ccn_community&date=${encodeURIComponent(state.blogDate)}&q=${q}&limit=${PAGE_SIZE}&offset=${offset}`
     );
     page.total = data.total;
     page.items = append ? page.items.concat(data.items) : data.items;

@@ -38,7 +38,7 @@ class CrawlManager:
         if not successful:
             days = max(self.config.initial_backfill_days, 1)
             start = today - timedelta(days=days - 1)
-            await self.crawl_range(start, today)
+            await self.crawl_range(start, today, run_postprocess=False)
             return
 
         yesterday = today - timedelta(days=1)
@@ -49,17 +49,17 @@ class CrawlManager:
                 missing.append(cursor)
             cursor += timedelta(days=1)
         if missing:
-            await self.crawl_dates(missing)
+            await self.crawl_dates(missing, run_postprocess=False)
 
-    async def crawl_range(self, start: date, end: date) -> None:
+    async def crawl_range(self, start: date, end: date, *, run_postprocess: bool = True) -> None:
         days = []
         cursor = start
         while cursor <= end:
             days.append(cursor)
             cursor += timedelta(days=1)
-        await self.crawl_dates(days)
+        await self.crawl_dates(days, run_postprocess=run_postprocess)
 
-    async def crawl_dates(self, dates: list[date]) -> None:
+    async def crawl_dates(self, dates: list[date], *, run_postprocess: bool = True) -> None:
         async with self.lock:
             self.status.update(
                 {
@@ -71,7 +71,7 @@ class CrawlManager:
             try:
                 for index, target in enumerate(dates, start=1):
                     self.status["message"] = f"crawling {target.isoformat()} ({index}/{len(dates)})"
-                    await self.crawl_day(target)
+                    await self.crawl_day(target, run_postprocess=run_postprocess)
             finally:
                 self.status.update(
                     {
@@ -81,7 +81,7 @@ class CrawlManager:
                     }
                 )
 
-    async def crawl_day(self, target: date) -> int:
+    async def crawl_day(self, target: date, *, run_postprocess: bool = True) -> int:
         self.db.mark_day_started(target)
         total_found = 0
         successful_runs = 0
@@ -109,7 +109,9 @@ class CrawlManager:
             status = "success"
         issues = errors + warnings
         self.db.mark_day_finished(target, status, total_found, "\n".join(issues) if issues else None)
-        await asyncio.to_thread(self.translate_recent_summaries)
+        if run_postprocess:
+            await asyncio.to_thread(self.llm_postprocess_recent)
+            await asyncio.to_thread(self.translate_recent_summaries)
         return total_found
 
     async def run_config_source(self, source: dict, target: date) -> SourceRunOutcome:
@@ -160,13 +162,21 @@ class CrawlManager:
         while True:
             await asyncio.sleep(seconds_until_next_run(self.config.timezone, self.config.daily_time))
             target = datetime.now(ZoneInfo(self.config.timezone)).date() - timedelta(days=1)
-            await self.crawl_dates([target])
+            await self.crawl_dates([target], run_postprocess=True)
 
     def translate_recent_summaries(self) -> None:
         try:
             from .translation import translate_missing
 
             translate_missing(limit=300)
+        except Exception:
+            pass
+
+    def llm_postprocess_recent(self) -> None:
+        try:
+            from .llm_postprocess import run_llm_postprocess
+
+            run_llm_postprocess(self.config, self.db)
         except Exception:
             pass
 

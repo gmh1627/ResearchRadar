@@ -5,6 +5,8 @@ ResearchRadar is a local browser-based personal AI research source agent. It cra
 ## Current Capabilities
 
 - Daily catch-up crawler with per-source run status and partial-failure reporting.
+- AIHOT public API source for curated X/KOL/product signals that ResearchRadar cannot collect directly.
+- GPT-5.5 post-collection relevance filtering, Chinese summary generation, five-dimension analysis, and code-side final scoring.
 - Categorized personal digest ranked by research profile, source authority, recency, trend signals, and user feedback, capped by `ranking.digest_max_items`.
 - Feedback learning across similar tags and sources, not only the exact same item.
 - Item Evidence Card with source reliability, evidence role, authors/categories, arXiv/PDF/HN/code links, and date semantics.
@@ -50,11 +52,19 @@ The default model path uses the OpenAI Responses API. For the Haoxiang gateway, 
 Chat latency controls live in `config/settings.yaml` under `llm.chat_timeout_seconds`,
 `llm.request_timeout_seconds`, `llm.max_model_attempts`, and `jina.timeout_seconds`.
 
+The ingestion post-process also uses GPT-5.5 by default (`llm_postprocess.model`).
+It first filters non-AI items, then asks the model for Chinese summaries, tags,
+relevance/novelty/significance/actionability/credibility dimensions, reasons,
+and next actions. The final quality score is still computed by ResearchRadar code
+from those dimensions plus source authority, trend, recency, and user feedback.
+
 ## Crawling Behavior
 
-- On first server startup, ResearchRadar backfills `initial_backfill_days` from `config/settings.yaml` (default 14 days).
-- On later startups, it checks missed crawl days and runs catch-up immediately.
+- Server startup initializes the database and scheduler, but does not run catch-up automatically, so the dashboard remains responsive after restart.
+- Manual `crawl` and scheduled daily crawls run the GPT-5.5 post-process after collection.
+- `catch-up` is still available as a CLI command for missed days, but intentionally skips the GPT-5.5 post-process to avoid a large surprise model bill.
 - While running, it crawls every day at `crawl.daily_time` in `crawl.timezone` (currently 08:40 Asia/Shanghai) and fetches the previous calendar day.
+- AIHOT is configured through `config/sources.yaml` as `aihot_public`, using `https://aihot.virxact.com/api/public/items` with `mode=selected`.
 - Each source run records `success`, `partial`, `skipped`, or `error`; a daily crawl is marked `partial` if any enabled source degrades or fails.
 - Undated page items are sorted by first-discovered time and labeled that way in the UI, so old pages are not silently treated as fresh publications.
 - If SSH disconnects, the background process keeps running.
@@ -64,6 +74,12 @@ Manual crawl:
 
 ```bash
 .venv/bin/python -m researchradar crawl --days 14
+```
+
+Manual GPT-5.5 post-process:
+
+```bash
+.venv/bin/python -m researchradar llm-postprocess --days 3 --limit 80
 ```
 
 ## Important Files

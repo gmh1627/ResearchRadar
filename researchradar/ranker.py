@@ -67,6 +67,24 @@ def score_item(
     secondary = profile.get("secondary_topics", [])
     negative = profile.get("negative_topics", [])
     preferred = set(profile.get("preferred_sources", []))
+    if llm_filtered_non_ai(item):
+        parts = {
+            "relevance": 0.0,
+            "authority": round(SOURCE_AUTHORITY.get(item.get("source_id"), 0.6), 3),
+            "credibility": 0.0,
+            "novelty": 0.0,
+            "significance": 0.0,
+            "research_value": 0.0,
+            "trend": 0.0,
+            "actionability": 0.0,
+            "recency": round(recency_signal(item), 3),
+            "personalization": 0.0,
+            "negative_penalty": 0.0,
+        }
+        return 0.0, parts
+    llm_dimensions = llm_postprocess_dimensions(item)
+    if llm_dimensions:
+        return score_item_from_llm_dimensions(item, profile, actions, feedback_signals, text, negative, preferred, llm_dimensions)
 
     relevance = keyword_score(text, primary, base=0.2, per_hit=0.18)
     relevance += keyword_score(text, secondary, base=0.0, per_hit=0.09)
@@ -125,6 +143,93 @@ def score_item(
     return score, parts
 
 
+def score_item_from_llm_dimensions(
+    item: dict[str, Any],
+    profile: dict[str, Any],
+    actions: list[str],
+    feedback_signals: dict[str, dict[str, float]],
+    text: str,
+    negative: list[str],
+    preferred: set[str],
+    dimensions: dict[str, float],
+) -> tuple[float, dict[str, float]]:
+    relevance = dimensions["relevance"]
+    novelty = dimensions["novelty"]
+    significance = dimensions["significance"]
+    actionability = dimensions["actionability"]
+    authority = SOURCE_AUTHORITY.get(item.get("source_id"), 0.6)
+    if item.get("source_id") in preferred:
+        authority += 0.08
+    source_tier = item.get("source_tier") or item.get("metadata", {}).get("source_tier")
+    authority += SOURCE_TIER_BONUS.get(str(source_tier or ""), 0.0)
+    authority = clamp(authority)
+    credibility = clamp(dimensions["credibility"] * 0.7 + authority * 0.3)
+    trend = trend_signal(item)
+    recency = recency_signal(item)
+    research_value = research_value_signal(item, relevance)
+    personalization = personalization_signal(item, feedback_signals)
+    negative_penalty = keyword_score(text, negative, base=0.0, per_hit=0.25)
+    feedback_boost = 0.0
+    if "save" in actions or "deep_read" in actions or "like" in actions:
+        feedback_boost -= 0.2
+    if "not_relevant" in actions or "ignore" in actions:
+        feedback_boost -= 0.5
+    score = (
+        0.24 * relevance
+        + 0.20 * significance
+        + 0.16 * novelty
+        + 0.14 * actionability
+        + 0.12 * credibility
+        + 0.07 * trend
+        + 0.05 * recency
+        + 0.04 * research_value
+        + 0.08 * personalization
+        - 0.28 * negative_penalty
+        + feedback_boost
+    )
+    parts = {
+        "llm_relevance": round(relevance, 3),
+        "llm_novelty": round(novelty, 3),
+        "llm_significance": round(significance, 3),
+        "llm_actionability": round(actionability, 3),
+        "llm_credibility": round(dimensions["credibility"], 3),
+        "relevance": round(relevance, 3),
+        "authority": round(authority, 3),
+        "credibility": round(credibility, 3),
+        "novelty": round(novelty, 3),
+        "significance": round(significance, 3),
+        "research_value": round(research_value, 3),
+        "trend": round(trend, 3),
+        "actionability": round(actionability, 3),
+        "recency": round(recency, 3),
+        "personalization": round(personalization, 3),
+        "negative_penalty": round(negative_penalty, 3),
+    }
+    return score, parts
+
+
+def llm_postprocess_dimensions(item: dict[str, Any]) -> dict[str, float] | None:
+    post = (item.get("metadata", {}) or {}).get("llm_postprocess") or {}
+    if post.get("status") != "analyzed":
+        return None
+    raw = post.get("dimensions") or {}
+    required = ["relevance", "novelty", "significance", "actionability", "credibility"]
+    if not all(key in raw for key in required):
+        return None
+    out = {}
+    for key in required:
+        try:
+            out[key] = clamp(float(raw[key]))
+        except (TypeError, ValueError):
+            return None
+    return out
+
+
+def llm_filtered_non_ai(item: dict[str, Any]) -> bool:
+    post = (item.get("metadata", {}) or {}).get("llm_postprocess") or {}
+    return post.get("status") == "filtered_non_ai"
+
+
 def keyword_score(text: str, keywords: list[str], *, base: float, per_hit: float) -> float:
     if not keywords:
         return 0.0
@@ -141,7 +246,11 @@ def trend_signal(item: dict[str, Any]) -> float:
     meta = item.get("metadata", {})
     if item.get("source_id") == "aihot_public":
         aihot_score = float(meta.get("aihot_score") or 0)
-        return clamp(aihot_score / 100)
+        if aihot_score:
+            return clamp(aihot_score / 100)
+        if meta.get("aihot_selected"):
+            return 0.65
+        return 0.45
     if item.get("source_id") == "hackernews":
         points = float(meta.get("points") or 0)
         comments = float(meta.get("comments") or 0)
@@ -168,6 +277,8 @@ def actionability_signal(item: dict[str, Any]) -> float:
         score += 0.1
     if item.get("metadata", {}).get("aihot_reason"):
         score += 0.12
+    if item.get("metadata", {}).get("aihot_category"):
+        score += 0.08
     return clamp(score)
 
 
@@ -278,9 +389,17 @@ def personalization_signal(item: dict[str, Any], signals: dict[str, dict[str, fl
 
 
 def build_relevance_reason(item: dict[str, Any], profile: dict[str, Any], parts: dict[str, float]) -> str:
-    aihot_reason = (item.get("metadata", {}) or {}).get("aihot_reason")
+    metadata = item.get("metadata", {}) or {}
+    post = metadata.get("llm_postprocess") or {}
+    if post.get("status") == "filtered_non_ai":
+        return "GPT-5.5 预筛判定为非 AI 相关：" + str(post.get("reason") or "未给出原因")
+    if post.get("status") == "analyzed" and item.get("relevance_reason"):
+        return str(item["relevance_reason"])
+    aihot_reason = metadata.get("aihot_reason")
     if aihot_reason:
         return "AIHOT 推荐理由：" + str(aihot_reason)
+    if item.get("source_id") == "aihot_public" and metadata.get("aihot_category_label"):
+        return "来自 AIHOT 精选 API，分类为：" + str(metadata["aihot_category_label"])
     if parts.get("personalization", 0) >= 0.35:
         tags = item.get("tags", [])
         if tags:
@@ -298,8 +417,15 @@ def build_relevance_reason(item: dict[str, Any], profile: dict[str, Any], parts:
 
 
 def recommended_action(item: dict[str, Any], parts: dict[str, float]) -> str:
+    post = (item.get("metadata", {}) or {}).get("llm_postprocess", {})
+    if post.get("status") == "filtered_non_ai":
+        return "忽略。该条目保留入库，但不进入精选排序。"
+    if post.get("status") == "analyzed" and item.get("recommended_action"):
+        return str(item["recommended_action"])
     if item.get("source_id") == "aihot_public":
-        return "把它当作二级线索：先看 AIHOT 摘要和推荐理由，再打开原始链接核验。"
+        if item.get("metadata", {}).get("aihot_reason"):
+            return "把它当作二级线索：先看 AIHOT 摘要和推荐理由，再打开原始链接核验。"
+        return "把它当作二级线索：先看 AIHOT 摘要和分类，再打开原始链接核验。"
     if item.get("source_type") == "paper" and parts["relevance"] >= 0.45:
         return "先读 abstract 和 method；若与当前课题相关，再加入深读列表。"
     if item.get("source_id") == "github":

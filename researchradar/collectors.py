@@ -28,6 +28,27 @@ from .textutils import (
 )
 
 
+AIHOT_API_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
+AIHOT_CATEGORY_LABELS = {
+    "ai-models": "模型发布/更新",
+    "ai-products": "产品发布/更新",
+    "industry": "行业动态",
+    "paper": "论文研究",
+    "tip": "技巧与观点",
+}
+AIHOT_CATEGORY_TAGS = {
+    "ai-models": "模型发布",
+    "ai-products": "产品更新",
+    "industry": "行业动态",
+    "paper": "论文/研究",
+    "tip": "技巧/观点",
+}
+
+
 @dataclass
 class CollectResult:
     source_id: str
@@ -61,7 +82,7 @@ class Collector:
             elif kind == "page":
                 items = await self.collect_page(source, target)
             elif kind == "aihot":
-                items = await self.collect_aihot_public(source, target)
+                return await self.collect_aihot_result(source, target)
             else:
                 return CollectResult(source_id, "error", [], f"unknown source type: {kind}")
             return CollectResult(source_id, "success", items)
@@ -460,19 +481,132 @@ class Collector:
                 break
         return dedupe_items(items)
 
-    async def collect_aihot_public(self, source: dict[str, Any], target: date) -> list[dict[str, Any]]:
-        # AIHOT's public robots.txt allows the public list pages and asks crawlers
-        # to stay off /api and parameterized pages. Treat it as a low-frequency
-        # curated secondary signal rather than a primary source.
+    async def collect_aihot_result(self, source: dict[str, Any], target: date) -> CollectResult:
+        # AIHOT exposes /api/public/* as an anonymous read-only integration.
+        # Use it first; keep the public page parser as a fallback because this
+        # source is a convenience signal, not a primary source of record.
+        source_id = source["id"]
         local_today = datetime.now(ZoneInfo(self.timezone)).date()
         if target < local_today - timedelta(days=1):
-            return []
+            return CollectResult(source_id, "skipped", [])
 
-        url = source.get("url") or "https://aihot.virxact.com/"
+        api_error = ""
+        api_url = source.get("api_url")
+        if api_url:
+            try:
+                items = await self.collect_aihot_api(source, target)
+                return CollectResult(source_id, "success", items)
+            except Exception as exc:
+                api_error = str(exc)
+        try:
+            items = await self.collect_aihot_public_page(source)
+        except Exception as exc:
+            if api_error:
+                return CollectResult(source_id, "error", [], f"api failed: {api_error}; page fallback failed: {exc}")
+            raise
+        if api_error:
+            return CollectResult(source_id, "partial", items, f"api failed; used public page fallback: {api_error}")
+        return CollectResult(source_id, "success", items)
+
+    async def collect_aihot_api(self, source: dict[str, Any], target: date) -> list[dict[str, Any]]:
+        api_url = source.get("api_url") or "https://aihot.virxact.com/api/public/items"
+        mode = str(source.get("api_mode") or "selected").strip() or "selected"
+        take = max(1, min(int(source.get("api_take") or self.max_items), self.max_items, 100))
+        tz = ZoneInfo(self.timezone)
+        since = datetime.combine(target, dt_time.min, tzinfo=tz).astimezone(timezone.utc)
+        params = {
+            "mode": mode,
+            "take": take,
+            "since": since.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        }
+        category = source.get("api_category")
+        if category:
+            params["category"] = str(category)
+        async with self.client() as client:
+            response = await client.get(
+                api_url,
+                params=params,
+                headers={
+                    "User-Agent": str(source.get("api_user_agent") or AIHOT_API_USER_AGENT),
+                    "Accept": "application/json",
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+        return self.parse_aihot_api_items(payload, source, api_url, mode)
+
+    async def collect_aihot_public_page(self, source: dict[str, Any]) -> list[dict[str, Any]]:
+        url = source.get("url") or source.get("homepage") or "https://aihot.virxact.com/"
         async with self.client() as client:
             response = await client.get(url)
             response.raise_for_status()
         return self.parse_aihot_timeline(response.text, source, url)
+
+    def parse_aihot_api_items(
+        self,
+        payload: dict[str, Any],
+        source: dict[str, Any],
+        api_url: str,
+        mode: str,
+    ) -> list[dict[str, Any]]:
+        page_url = source.get("homepage") or source.get("url") or "https://aihot.virxact.com/"
+        items: list[dict[str, Any]] = []
+        for entry in payload.get("items", []) or []:
+            if not isinstance(entry, dict):
+                continue
+            item_url = canonical_url(str(entry.get("url") or ""))
+            if not item_url.startswith(("http://", "https://")):
+                continue
+            title = normalize_title(str(entry.get("title") or entry.get("title_en") or ""))
+            summary = strip_html(str(entry.get("summary") or ""), limit=1800)
+            if not title:
+                title = normalize_title(summary[:120] or "AIHOT curated signal")
+            if len(title) > 180:
+                title = title[:177].rstrip() + "..."
+            origin_source = normalize_title(str(entry.get("source") or "AIHOT"))
+            category = normalize_title(str(entry.get("category") or ""))
+            category_label = AIHOT_CATEGORY_LABELS.get(category, category)
+            tags = [tag for tag in [AIHOT_CATEGORY_TAGS.get(category), category_label] if tag]
+            reason = normalize_aihot_reason(str(entry.get("aiSelectedReason") or entry.get("reason") or ""))
+            aihot_score = first_int(entry.get("qualityScore"), entry.get("finalScore"), entry.get("score"))
+            metadata = {
+                "aihot_page": page_url,
+                "aihot_api_url": api_url,
+                "aihot_api_id": entry.get("id"),
+                "aihot_api_mode": mode,
+                "aihot_category": category or None,
+                "aihot_category_label": category_label or None,
+                "aihot_score": aihot_score,
+                "aihot_reason": reason,
+                "aihot_origin_source": origin_source,
+                "aihot_origin_handle": aihot_handle_from_source(origin_source),
+                "aihot_selected": mode == "selected" or bool(entry.get("aiSelected")),
+                "external_url": item_url,
+                "source_tier": source.get("tier"),
+            }
+            if entry.get("title_en"):
+                metadata["aihot_original_title"] = entry.get("title_en")
+            item = self.make_item(
+                source_id=source["id"],
+                source_name=f"AIHOT · {origin_source}",
+                source_type=source.get("source_type", "signal"),
+                title=title,
+                url=item_url,
+                summary=summary or title,
+                published_at=parse_datetime(entry.get("publishedAt")),
+                authors=[metadata["aihot_origin_handle"].lstrip("@")] if metadata["aihot_origin_handle"] else [],
+                categories=[category] if category else [],
+                source_reliability=source.get("reliability", "medium"),
+                evidence_role=source.get("evidence_role", "curated_secondary_signal"),
+                metadata=metadata,
+                extra_tags=["AIHOT线索", *tags],
+            )
+            if contains_cjk(item["summary"]):
+                item["summary_zh"] = item["summary"]
+            items.append(item)
+            if len(items) >= self.max_items:
+                break
+        return dedupe_items(items)
 
     def parse_aihot_timeline(self, html_text: str, source: dict[str, Any], page_url: str) -> list[dict[str, Any]]:
         soup = BeautifulSoup(html_text, "html.parser")
@@ -723,6 +857,24 @@ def parse_count(value: str | None) -> int | None:
     suffix = match.group(2)
     multiplier = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}.get(suffix, 1)
     return int(number * multiplier)
+
+
+def first_int(*values: Any) -> int | None:
+    for value in values:
+        if value is None or value == "":
+            continue
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            parsed = parse_count(str(value))
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def aihot_handle_from_source(value: str) -> str:
+    match = re.search(r"\(@([^)]+)\)", value or "")
+    return f"@{match.group(1).strip()}" if match else ""
 
 
 def parse_aihot_datetime(date_label: str, time_label: str, year: int, tz: ZoneInfo) -> datetime | None:

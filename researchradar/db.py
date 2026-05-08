@@ -320,6 +320,23 @@ class Database:
                 (status, ts, items_found, error, target_date.isoformat()),
             )
 
+    def mark_interrupted_crawl_days(self) -> int:
+        ts = datetime.now(timezone.utc).isoformat()
+        message = "Interrupted before the previous crawl finished; marked during server startup."
+        with self.connect() as conn:
+            before = conn.total_changes
+            conn.execute(
+                """
+                UPDATE crawl_days
+                SET status='interrupted',
+                    finished_at=?,
+                    error=COALESCE(NULLIF(error, ''), ?)
+                WHERE status='running'
+                """,
+                (ts, message),
+            )
+            return conn.total_changes - before
+
     def add_source_run(
         self,
         target_date: date,
@@ -482,6 +499,71 @@ class Database:
                 """
                 UPDATE items
                 SET quality_score=?, score_parts_json=?, relevance_reason=?, recommended_action=?
+                WHERE id=?
+                """,
+                rows,
+            )
+
+    def items_for_llm_postprocess(self, *, days: int = 3, limit: int = 80, pipeline_version: str = "") -> list[dict[str, Any]]:
+        since = datetime.now(timezone.utc) - timedelta(days=max(days, 1))
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM items
+                WHERE COALESCE(published_at, collected_at) >= ?
+                  AND (
+                    json_extract(metadata_json, '$.llm_postprocess.version') IS NULL
+                    OR json_extract(metadata_json, '$.llm_postprocess.version') <> ?
+                    OR json_extract(metadata_json, '$.llm_postprocess.status') = 'error'
+                  )
+                ORDER BY (published_at IS NULL) ASC, COALESCE(published_at, collected_at) DESC
+                LIMIT ?
+                """,
+                (since.isoformat(), pipeline_version, max(1, limit)),
+            ).fetchall()
+        return [decode_item(row) for row in rows]
+
+    def update_llm_postprocess(self, items: Iterable[dict[str, Any]]) -> None:
+        rows = []
+        for item in items:
+            item_id = item.get("id")
+            if not item_id:
+                continue
+            tags = item.get("tags", [])
+            categories = item.get("categories", [])
+            metadata = item.get("metadata", {})
+            rows.append(
+                (
+                    item.get("summary", ""),
+                    item.get("summary_zh", ""),
+                    json.dumps(tags, ensure_ascii=False),
+                    json.dumps(categories, ensure_ascii=False),
+                    item.get("quality_score"),
+                    json.dumps(item.get("score_parts") or {}, ensure_ascii=False),
+                    item.get("relevance_reason", ""),
+                    item.get("recommended_action", ""),
+                    json.dumps(metadata, ensure_ascii=False),
+                    build_search_text(item.get("title", ""), item.get("summary", ""), tags, categories),
+                    item_id,
+                )
+            )
+        if not rows:
+            return
+        with self.connect() as conn:
+            conn.executemany(
+                """
+                UPDATE items
+                SET summary=?,
+                    summary_zh=?,
+                    tags_json=?,
+                    categories_json=?,
+                    quality_score=?,
+                    score_parts_json=?,
+                    relevance_reason=?,
+                    recommended_action=?,
+                    metadata_json=?,
+                    search_text=?
                 WHERE id=?
                 """,
                 rows,
@@ -891,6 +973,10 @@ class Database:
 
 def encode_json(value: Any) -> str:
     return json.dumps(value if value is not None else [], ensure_ascii=False)
+
+
+def build_search_text(title: str, summary: str, tags: list[Any], categories: list[Any]) -> str:
+    return f"{title}\n{summary}\n{' '.join(str(tag) for tag in tags)}\n{' '.join(str(category) for category in categories)}".lower()
 
 
 def ensure_column(conn: sqlite3.Connection, table: str, column: str, declaration: str) -> None:

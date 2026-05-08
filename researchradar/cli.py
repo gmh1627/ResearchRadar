@@ -26,6 +26,10 @@ def parse_args() -> argparse.Namespace:
     translate = sub.add_parser("translate-missing")
     translate.add_argument("--limit", type=int, default=500)
     translate.add_argument("--batch-size", type=int, default=32)
+
+    postprocess = sub.add_parser("llm-postprocess")
+    postprocess.add_argument("--limit", type=int)
+    postprocess.add_argument("--days", type=int)
     return parser.parse_args()
 
 
@@ -51,6 +55,13 @@ def main() -> None:
         print(f"Translated {count} item summaries.")
         return
 
+    if args.command == "llm-postprocess":
+        from .llm_postprocess import run_llm_postprocess
+
+        count = run_llm_postprocess(config, db, limit=args.limit, days=args.days)
+        print(f"LLM postprocessed {count} items.")
+        return
+
     if args.command == "catch-up":
         asyncio.run(manager.catch_up())
         print("Catch-up finished.")
@@ -63,7 +74,7 @@ def main() -> None:
         else:
             end = datetime.now(timezone.utc).date()
             start = end - timedelta(days=max(args.days, 1) - 1)
-        asyncio.run(manager.crawl_range(start, end))
+        asyncio.run(manager.crawl_range(start, end, run_postprocess=True))
         print(f"Crawl finished: {start.isoformat()} to {end.isoformat()}")
         return
 

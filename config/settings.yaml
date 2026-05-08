@@ -53,6 +53,16 @@ llm:
   max_model_attempts: 1
   max_output_tokens: 4096
 
+llm_postprocess:
+  enabled: true
+  model: "gpt-5.5"
+  pipeline_version: "gpt55-v1"
+  days: 3
+  max_items_per_run: 80
+  prefilter_batch_size: 12
+  analysis_batch_size: 6
+  min_ai_confidence: 0.55
+
 jina:
   api_key_env: "JINA_API_KEY"
   reader_url: "https://r.jina.ai/http://"

@@ -163,9 +163,12 @@ sources:
     tier: "T1_5"
 
   - id: "aihot_public"
-    name: "AIHOT 精选公开页"
+    name: "AIHOT 精选 API"
     type: "aihot"
     url: "https://aihot.virxact.com/"
+    api_url: "https://aihot.virxact.com/api/public/items"
+    api_mode: "selected"
+    api_take: 80
     homepage: "https://aihot.virxact.com/"
     enabled: true
     source_type: "signal"
