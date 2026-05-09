@@ -1,0 +1,23 @@
+{
+  "name": "researchradar-slidev",
+  "version": "1.0.0",
+  "description": "Slidev deck introducing ResearchRadar",
+  "scripts": {
+    "dev": "slidev --remote 0.0.0.0",
+    "build": "slidev build",
+    "export:pdf": "slidev export --output researchradar-intro.pdf",
+    "export:pptx": "slidev export --format pptx --output researchradar-intro.pptx"
+  },
+  "keywords": [
+    "slidev",
+    "researchradar",
+    "presentation"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "devDependencies": {
+    "@slidev/cli": "^52.15.1",
+    "@slidev/theme-default": "^0.25.0"
+  }
+}

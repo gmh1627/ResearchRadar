@@ -1,0 +1,265 @@
+:root {
+  --rr-teal: #009b8f;
+  --rr-mint: #dff7f1;
+  --rr-ink: #171717;
+  --rr-muted: #6f6b66;
+  --rr-line: #ded9d2;
+  --rr-warm: #fff8ec;
+  --rr-pink: #ff5db1;
+}
+
+.slidev-layout {
+  background: #faf8f4;
+  color: var(--rr-ink);
+  font-size: 22px;
+  line-height: 1.35;
+}
+
+.slidev-layout h1,
+.slidev-layout h2,
+.slidev-layout h3 {
+  color: var(--rr-ink);
+  letter-spacing: 0;
+  line-height: 1.08 !important;
+}
+
+.slidev-layout h1 {
+  font-size: 58px;
+}
+
+.slidev-layout h2 {
+  font-size: 42px;
+  margin-bottom: 24px;
+}
+
+.slidev-layout h3 {
+  font-size: 24px;
+  margin-bottom: 8px;
+}
+
+.slidev-layout p,
+.slidev-layout li {
+  color: #302d2a;
+}
+
+.slidev-layout ul {
+  margin-top: 12px;
+}
+
+.slidev-layout li {
+  margin: 10px 0;
+}
+
+.slidev-layout code {
+  color: #006f66;
+  background: #e7f4ef;
+  border: 1px solid #c6e5dc;
+  border-radius: 6px;
+  padding: 2px 7px;
+}
+
+.rr-cover {
+  min-height: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(380px, 0.72fr);
+  align-items: center;
+  gap: 48px;
+}
+
+.rr-cover h1 {
+  font-size: 76px;
+  margin: 18px 0;
+}
+
+.eyebrow {
+  color: var(--rr-teal) !important;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 18px;
+}
+
+.slidev-layout .subtitle {
+  max-width: 740px;
+  font-size: 25px !important;
+  line-height: 1.55 !important;
+  color: #3b3835 !important;
+}
+
+.rr-cover-card {
+  height: 360px;
+  border: 1px solid var(--rr-line);
+  background: #fff;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 38px;
+  box-shadow: 0 18px 50px rgb(30 20 10 / 0.12);
+}
+
+.rr-cover-card span,
+.rr-cover-card small {
+  color: var(--rr-muted);
+}
+
+.rr-cover-card strong {
+  font-size: 92px;
+  color: var(--rr-teal);
+  line-height: 1;
+  margin: 18px 0;
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18px;
+}
+
+.stat-grid div {
+  background: #fff;
+  border: 1px solid var(--rr-line);
+  border-radius: 8px;
+  padding: 24px;
+  min-height: 130px;
+}
+
+.stat-grid strong {
+  display: block;
+  font-size: 46px;
+  color: var(--rr-teal);
+}
+
+.stat-grid span {
+  color: var(--rr-muted);
+}
+
+.source-strip {
+  margin-top: 24px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.source-strip span {
+  border: 1px solid #cbded9;
+  background: #fff;
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 17px;
+  color: #3d4643;
+}
+
+.pipeline {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 14px;
+  margin-top: 30px;
+}
+
+.pipeline div,
+.llm-grid div,
+.architecture div,
+.roadmap div {
+  background: #fff;
+  border: 1px solid var(--rr-line);
+  border-radius: 8px;
+  padding: 22px;
+}
+
+.pipeline b {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  background: var(--rr-teal);
+  color: #fff;
+  border-radius: 50%;
+  margin-bottom: 18px;
+}
+
+.pipeline span {
+  display: block;
+  font-weight: 800;
+  margin-bottom: 10px;
+}
+
+.pipeline small,
+.note {
+  color: var(--rr-muted) !important;
+}
+
+.note {
+  margin-top: 28px;
+  padding: 14px 18px;
+  border-left: 4px solid var(--rr-teal);
+  background: #eef9f5;
+}
+
+.llm-grid,
+.architecture {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 18px;
+}
+
+.llm-grid div {
+  min-height: 170px;
+}
+
+.formula {
+  background: #101010;
+  color: #f8f1e8;
+  border-radius: 8px;
+  padding: 26px 30px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 25px;
+  margin: 28px 0;
+}
+
+.architecture div {
+  min-height: 150px;
+}
+
+.roadmap {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 18px;
+}
+
+.roadmap b {
+  display: block;
+  color: var(--rr-teal);
+  margin-bottom: 10px;
+}
+
+.roadmap span {
+  color: #36322f;
+}
+
+.ending {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+}
+
+.ending h1 {
+  max-width: 980px;
+  font-size: 54px;
+}
+
+.ending p {
+  max-width: 920px;
+  font-size: 29px;
+}
+
+.ending code {
+  margin-top: 24px;
+  font-size: 24px;
+}
+
+.slidev-layout.image-right img {
+  object-position: left top;
+}
