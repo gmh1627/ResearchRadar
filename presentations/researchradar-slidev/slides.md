@@ -18,7 +18,7 @@ fonts:
   <div>
     <p class="eyebrow">Personal AI Research Source Agent</p>
     <h1>ResearchRadar</h1>
-    <p class="subtitle">把论文、实验室动态、代码项目、社区讨论和 AIHOT 精选线索汇入一个可解释、可追踪、可对话的研究雷达。</p>
+    <p class="subtitle">把论文、实验室动态、代码项目、社区讨论和 AIHOT 信源汇入一个可解释、可追踪、可对话的研究雷达。</p>
   </div>
   <div class="rr-cover-card">
     <span>本地浏览器仪表盘</span>
@@ -61,12 +61,12 @@ AI 研究信息流现在有三个实际问题：
   <div><strong>1518</strong><span>Hacker News 工程讨论</span></div>
   <div><strong>280</strong><span>公司与实验室博客</span></div>
   <div><strong>258</strong><span>GitHub 趋势项目</span></div>
-  <div><strong>64</strong><span>AIHOT 精选外部线索</span></div>
+  <div><strong>64</strong><span>AIHOT 外部精选线索</span></div>
   <div><strong>49</strong><span>中文社区内容</span></div>
 </div>
 
 <div class="source-strip">
-  <span>OpenAI</span><span>Anthropic</span><span>DeepMind</span><span>Meta AI</span><span>Google Research</span><span>Hugging Face</span><span>Qwen</span><span>AIHOT</span>
+  <span>OpenAI</span><span>Anthropic</span><span>DeepMind</span><span>Meta AI</span><span>Google Research</span><span>Hugging Face</span><span>Qwen</span><span>AIHOT</span><span>X/KOL</span><span>媒体</span>
 </div>
 
 ---
@@ -99,28 +99,22 @@ image: /dashboard.png
 
 ---
 
-## 为什么加入 AIHOT
+## 接入 AIHOT 信源
 
-ResearchRadar 目前不能稳定直接抓取 X.com。AIHOT 刚好能补上早期信号层：
+ResearchRadar 目前不能稳定直接抓取 X.com，所以接入 AIHOT 作为二级精选信号层：
 
-- X / KOL / 产品发布 / 行业动态的二级精选入口
-- 低频抓取即可：每日早上一次，避免重复请求
-- 作为 `signal` 类型入库，不替代原始来源
-- 保留 AIHOT 分类、原始来源、外部链接、精选状态
+- 信源类型：官方博客、工程博客、官方 X、创始人和研究者个人号、KOL、媒体、综合资讯站。
+- 信源分层：T1 一手官方源，T1.5 官方社交账号，T2 个人号、媒体和综合信息源。
+- 采集方式：通过 AIHOT API 获取精选条目，每天早上低频抓取一次。
+- 使用方式：作为 `signal` 类型入库，保留原始链接、来源、分类和精选状态。
 
-```yaml
-id: aihot_public
-type: aihot
-api_url: https://aihot.virxact.com/api/public/items
-api_mode: selected
-api_take: 80
-```
+<p class="note">AIHOT 的价值是补充早期市场信号，不替代原始来源核验。</p>
 
 ---
 
 ## GPT-5.5 的使用方式
 
-ResearchRadar 现在更接近 AIHOT 的思路：
+ResearchRadar 的大模型使用方式采用“模型给维度，代码做决策”的结构：
 
 <div class="llm-grid">
   <div>
@@ -159,18 +153,19 @@ score = 相关性 + 重要性 + 新颖性 + 可行动性 + 可信度 + 趋势 + 
 - `evidence_links`：原始链接、PDF、HN、AIHOT 页等
 
 ---
-layout: image-right
-image: /knowledge.png
----
 
 ## 知识库：把阅读变成长期资产
 
 ResearchRadar 不只做“今日列表”，还记录研究行为。
 
-- 收藏、深读、问答、笔记统一沉淀
-- 研究画像展示主兴趣、次兴趣、排除项、偏好来源
-- 行为标签反向影响个性化排序
-- 图谱视图连接条目、反馈、问答和笔记
+<div class="knowledge-flow">
+  <div><b>阅读</b><span>看过、打开证据链接、搜索筛选</span></div>
+  <div><b>反馈</b><span>有用、收藏、深读、忽略</span></div>
+  <div><b>问答</b><span>围绕条目追问、保存回答</span></div>
+  <div><b>笔记</b><span>沉淀选题、实验想法和引用线索</span></div>
+</div>
+
+<p class="note">这些行为会反向影响个性化排序，让日报越来越贴合研究画像。</p>
 
 ---
 layout: image-right
@@ -217,7 +212,7 @@ image: /sources.png
 
 需要明确的限制：
 
-- AIHOT 是二级线索，最终仍要打开原始来源核验。
+- AIHOT 信源是二级线索，最终仍要打开原始来源核验。
 - X.com 仍未直接抓取，AIHOT 只是补足一部分高价值信号。
 - GPT-5.5 后处理按批执行，有成本和延迟，需要控制 `limit`、`days`。
 - 网络不可用时爬取会失败，但会记录为 source status，不会伪造新内容。
