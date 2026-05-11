@@ -207,7 +207,7 @@ class CrawlManager:
     async def scheduler_loop(self) -> None:
         while True:
             run_tz_name = self.config.daily_time_timezone
-            await asyncio.sleep(seconds_until_next_run(run_tz_name, self.config.daily_time))
+            await asyncio.sleep(seconds_until_next_run(run_tz_name, self.config.daily_time, self.config.daily_weekdays))
             target = datetime.now(ZoneInfo(run_tz_name)).date()
             await self.crawl_dates([target], run_postprocess=True)
             await self.repair_recent_source_gaps(run_postprocess=True)
@@ -229,12 +229,12 @@ class CrawlManager:
             pass
 
 
-def seconds_until_next_run(tz_name: str, hhmm: str) -> float:
+def seconds_until_next_run(tz_name: str, hhmm: str, weekdays: set[int] | None = None) -> float:
     tz = ZoneInfo(tz_name)
     now = datetime.now(tz)
     hour, minute = [int(part) for part in hhmm.split(":", 1)]
     next_run = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    if next_run <= now:
+    while next_run <= now or (weekdays is not None and next_run.weekday() not in weekdays):
         next_run += timedelta(days=1)
     return max((next_run - now).total_seconds(), 1.0)
 

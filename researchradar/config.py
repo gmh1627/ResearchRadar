@@ -65,6 +65,36 @@ class AppConfig:
         return str(crawl.get("daily_time_timezone", crawl.get("timezone", "Asia/Shanghai")))
 
     @property
+    def daily_weekdays(self) -> set[int] | None:
+        raw = self.settings.get("crawl", {}).get("daily_weekdays")
+        if not raw:
+            return None
+        name_to_weekday = {
+            "mon": 0,
+            "monday": 0,
+            "tue": 1,
+            "tuesday": 1,
+            "wed": 2,
+            "wednesday": 2,
+            "thu": 3,
+            "thursday": 3,
+            "fri": 4,
+            "friday": 4,
+            "sat": 5,
+            "saturday": 5,
+            "sun": 6,
+            "sunday": 6,
+        }
+        weekdays: set[int] = set()
+        values = raw if isinstance(raw, list) else str(raw).split(",")
+        for value in values:
+            key = str(value).strip().lower()
+            if key == "":
+                continue
+            weekdays.add(name_to_weekday.get(key, int(key) if key.isdigit() else -1))
+        return {day for day in weekdays if 0 <= day <= 6} or None
+
+    @property
     def initial_backfill_days(self) -> int:
         return int(self.settings.get("crawl", {}).get("initial_backfill_days", 14))
 

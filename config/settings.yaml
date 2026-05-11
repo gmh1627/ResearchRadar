@@ -4,9 +4,10 @@ server:
 
 crawl:
   timezone: "Asia/Shanghai"
-  # arXiv announces new submissions around 20:00 US Eastern on announcement days.
+  # arXiv announces new submissions at 20:00 US Eastern, Sunday through Thursday.
   daily_time_timezone: "America/New_York"
   daily_time: "20:10"
+  daily_weekdays: ["sun", "mon", "tue", "wed", "thu"]
   initial_backfill_days: 14
   request_timeout_seconds: 25
   max_items_per_source: 80
