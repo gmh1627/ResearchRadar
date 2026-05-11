@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>ResearchRadar</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260503-dpi-fix" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260511-wiki-graph" />
     <script>
       window.MathJax = {
         tex: {
@@ -145,7 +145,7 @@
                   <option value="repo">代码</option>
                   <option value="discussion">讨论</option>
                   <option value="cn_community">中文源</option>
-                  <option value="signal">外部线索</option>
+                  <option value="signal">外部精选</option>
                 </select>
                 <select id="daysFilter">
                   <option value="7">近 7 天</option>
@@ -195,12 +195,34 @@
           </div>
           <div id="knowledgeStats" class="knowledge-stats"></div>
           <div id="knowledgeProfile" class="knowledge-profile"></div>
+          <div class="wiki-workbench">
+            <div class="subhead wiki-head">
+              <div>
+                <h3>LLM Wiki</h3>
+                <span class="muted">把原始来源编译成可持续维护的 index、概念页、来源页和日志</span>
+              </div>
+              <button id="compileWikiBtn">编译知识库</button>
+            </div>
+            <div class="wiki-layout">
+              <div id="wikiPages" class="wiki-pages"></div>
+              <article id="wikiReader" class="wiki-reader">
+                <div class="empty-state">选择一页 wiki，或点击“编译知识库”。</div>
+              </article>
+              <div id="wikiLog" class="wiki-log"></div>
+            </div>
+          </div>
           <div class="subhead">
             <h3>知识图谱</h3>
             <span id="knowledgeGraphMeta" class="muted">基于看过、收藏、问答和笔记生成</span>
           </div>
           <div class="graph-shell">
             <canvas id="knowledgeGraph" width="980" height="560"></canvas>
+            <div id="knowledgeGraphTip" class="graph-tip hidden"></div>
+            <div class="graph-legend">
+              <span><i class="legend-topic"></i>概念</span>
+              <span><i class="legend-source"></i>来源</span>
+              <span><i class="legend-item"></i>条目</span>
+            </div>
           </div>
           <div class="knowledge-columns">
             <section>
@@ -279,6 +301,6 @@
     </div>
     <div id="toast" class="toast hidden"></div>
 
-    <script src="/static/app.js?v=20260504-percent-fix"></script>
+    <script src="/static/app.js?v=20260511-wiki-graph"></script>
   </body>
 </html>

@@ -20,6 +20,7 @@ from .llm import answer_question, fallback_answer, llm_runtime_status, serper_se
 from .ranker import rank_items
 from .textutils import stable_id
 from .translation import SummaryTranslator
+from .wiki import compile_wiki_pages
 
 
 config = load_config()
@@ -49,8 +50,8 @@ DIGEST_SECTIONS = [
     },
     {
         "key": "signals",
-        "label": "外部精选线索",
-        "description": "AIHOT 等外部精选流，作为发现 X / KOL / 媒体早期信号的二级入口。",
+        "label": "外部精选",
+        "description": "AIHOT 等外部精选流，作为发现 X / KOL / 媒体动态的二级入口。",
     },
     {
         "key": "other",
@@ -67,6 +68,7 @@ async def lifespan(app: FastAPI):
     db.initialize()
     db.mark_interrupted_crawl_days()
     asyncio.create_task(crawler.scheduler_loop())
+    asyncio.create_task(crawler.catch_up())
     yield
 
 
@@ -100,6 +102,11 @@ class NoteRequest(BaseModel):
     content: str
     tags: list[str] = []
     importance: int = 3
+
+
+class WikiCompileRequest(BaseModel):
+    user_id: str = "default"
+    limit: int = 80
 
 
 class WebSearchRequest(BaseModel):
@@ -315,6 +322,8 @@ async def knowledge(user_id: str = "default"):
         "items": saved_items,
         "notes": db.list_notes(user_id),
         "conversations": db.list_conversations(user_id, limit=60),
+        "wiki_pages": db.list_wiki_pages(user_id),
+        "wiki_log": db.list_wiki_log(user_id, limit=20),
     }
 
 
@@ -322,6 +331,26 @@ async def knowledge(user_id: str = "default"):
 async def knowledge_graph(user_id: str = "default", limit: int = 80):
     items = [with_display_summary(row) for row in db.knowledge_graph_items(user_id, limit=max(10, min(limit, 160)))]
     return build_knowledge_graph(items)
+
+
+@app.post("/api/knowledge/compile")
+async def compile_knowledge(req: WikiCompileRequest):
+    profile = find_profile(req.user_id)
+    items = [with_display_summary(row) for row in db.knowledge_graph_items(req.user_id, limit=max(20, min(req.limit, 160)))]
+    notes = db.list_notes(req.user_id)
+    conversations = db.list_conversations(req.user_id, limit=40)
+    existing = db.list_wiki_pages(req.user_id)
+    pages = await asyncio.to_thread(
+        compile_wiki_pages,
+        settings=config.settings,
+        profile=profile,
+        items=items,
+        notes=notes,
+        conversations=conversations,
+        existing_pages=existing,
+    )
+    changed = db.upsert_wiki_pages(req.user_id, pages, event_title="compile knowledge wiki")
+    return {"ok": True, "changed": changed, "pages": db.list_wiki_pages(req.user_id), "wiki_log": db.list_wiki_log(req.user_id)}
 
 
 @app.post("/api/notes")
@@ -491,6 +520,8 @@ def build_knowledge_graph(items: list[dict[str, Any]]) -> dict[str, Any]:
     edges: dict[tuple[str, str], dict[str, Any]] = {}
     tag_to_items: dict[str, list[str]] = {}
     source_to_items: dict[str, list[str]] = {}
+    topic_counts: dict[str, int] = {}
+    source_counts: dict[str, int] = {}
 
     for item in items:
         item_id = item["id"]
@@ -509,34 +540,89 @@ def build_knowledge_graph(items: list[dict[str, Any]]) -> dict[str, Any]:
                 "score": item.get("score"),
                 "weight": min(34, 12 + signal * 3 + len(tags)),
                 "timestamp": item.get("knowledge_at") or item.get("display_timestamp"),
+                "node_type": "item",
             }
         )
         for tag in tags[:8]:
             tag_to_items.setdefault(tag, []).append(item_id)
-        source_to_items.setdefault(item.get("source_id") or item.get("source_name") or "source", []).append(item_id)
+            topic_counts[tag] = topic_counts.get(tag, 0) + 1
+        source_key = item.get("source_id") or item.get("source_name") or "source"
+        source_to_items.setdefault(source_key, []).append(item_id)
+        source_counts[source_key] = source_counts.get(source_key, 0) + 1
 
-    for tag, ids in tag_to_items.items():
-        add_graph_pairs(edges, ids, "tag", tag, weight=2.2)
-    for source, ids in source_to_items.items():
-        add_graph_pairs(edges, ids[:24], "source", source, weight=1.1)
+    top_tags = sorted(tag_to_items.items(), key=lambda pair: len(pair[1]), reverse=True)[:14]
+    top_sources = sorted(source_to_items.items(), key=lambda pair: len(pair[1]), reverse=True)[:10]
+    hub_ids: set[str] = set()
+
+    for tag, ids in top_tags:
+        hub_id = "topic:" + graph_slug(tag)
+        hub_ids.add(hub_id)
+        nodes.append(
+            {
+                "id": hub_id,
+                "label": tag,
+                "title": tag,
+                "source_name": "概念",
+                "source_type": "topic",
+                "node_type": "topic",
+                "tags": [tag],
+                "weight": min(44, 18 + len(ids) * 1.7),
+                "count": len(ids),
+            }
+        )
+        for item_id in ids[:28]:
+            add_graph_edge(edges, hub_id, item_id, "tag", tag, weight=2.8)
+
+    for source, ids in top_sources:
+        label = source_label(source, items)
+        hub_id = "source:" + graph_slug(source)
+        hub_ids.add(hub_id)
+        nodes.append(
+            {
+                "id": hub_id,
+                "label": label,
+                "title": label,
+                "source_name": "来源",
+                "source_type": "source_hub",
+                "node_type": "source",
+                "tags": [],
+                "weight": min(38, 15 + len(ids) * 1.25),
+                "count": len(ids),
+            }
+        )
+        for item_id in ids[:20]:
+            add_graph_edge(edges, hub_id, item_id, "source", label, weight=1.4)
+
+    for item in items:
+        item_tags = [tag for tag in visible_tags(item.get("tags", []))[:5] if topic_counts.get(tag, 0) >= 2]
+        for a, b in zip(item_tags, item_tags[1:]):
+            source = "topic:" + graph_slug(a)
+            target = "topic:" + graph_slug(b)
+            if source in hub_ids and target in hub_ids:
+                add_graph_edge(edges, source, target, "co_topic", f"{a} / {b}", weight=0.7)
 
     return {
         "nodes": nodes,
         "edges": list(edges.values()),
-        "stats": {"node_count": len(nodes), "edge_count": len(edges), "tag_count": len(tag_to_items)},
+        "stats": {
+            "node_count": len(nodes),
+            "edge_count": len(edges),
+            "tag_count": len(tag_to_items),
+            "topic_count": len(top_tags),
+            "source_count": len(top_sources),
+        },
     }
 
 
-def add_graph_pairs(edges: dict[tuple[str, str], dict[str, Any]], ids: list[str], kind: str, label: str, weight: float) -> None:
-    unique_ids = list(dict.fromkeys(ids))
-    for i, source in enumerate(unique_ids):
-        for target in unique_ids[i + 1 :]:
-            key = tuple(sorted((source, target)))
-            if key not in edges:
-                edges[key] = {"source": key[0], "target": key[1], "weight": 0.0, "reasons": []}
-            edges[key]["weight"] += weight
-            if len(edges[key]["reasons"]) < 3:
-                edges[key]["reasons"].append({"kind": kind, "label": label})
+def add_graph_edge(edges: dict[tuple[str, str], dict[str, Any]], source: str, target: str, kind: str, label: str, weight: float) -> None:
+    if source == target:
+        return
+    key = tuple(sorted((source, target)))
+    if key not in edges:
+        edges[key] = {"source": source, "target": target, "weight": 0.0, "reasons": []}
+    edges[key]["weight"] += weight
+    if len(edges[key]["reasons"]) < 3:
+        edges[key]["reasons"].append({"kind": kind, "label": label})
 
 
 def graph_label(item: dict[str, Any]) -> str:
@@ -550,6 +636,19 @@ def graph_label(item: dict[str, Any]) -> str:
         surname = str(authors[0]).split()[-1].strip(",")
         return f"{surname}, {year}" if year else surname
     return title[:34] + ("..." if len(title) > 34 else "")
+
+
+def graph_slug(value: Any) -> str:
+    text = re.sub(r"[^a-zA-Z0-9\u4e00-\u9fff]+", "-", str(value or "").strip().lower())
+    text = re.sub(r"-+", "-", text).strip("-")
+    return text[:64] or "node"
+
+
+def source_label(source: str, items: list[dict[str, Any]]) -> str:
+    for item in items:
+        if (item.get("source_id") or item.get("source_name") or "source") == source:
+            return str(item.get("source_name") or source)
+    return str(source)
 
 
 def digest_section_key(item: dict[str, Any]) -> str:

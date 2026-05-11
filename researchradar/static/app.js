@@ -25,6 +25,10 @@ const state = {
     animation: null,
     activeNode: null,
   },
+  wiki: {
+    pages: [],
+    activeSlug: "",
+  },
 };
 
 const $ = (id) => document.getElementById(id);
@@ -35,7 +39,7 @@ const TYPE_LABELS = {
   repo: "代码",
   discussion: "讨论",
   cn_community: "中文源",
-  signal: "线索",
+  signal: "精选",
 };
 
 const STATUS_LABELS = {
@@ -62,7 +66,7 @@ const EVIDENCE_ROLE_LABELS = {
   cn_research_update: "中文研究动态",
   code_signal: "代码信号",
   engineering_discussion: "工程讨论",
-  curated_secondary_signal: "外部精选线索",
+  curated_secondary_signal: "外部精选",
 };
 
 const DATE_KIND_LABELS = {
@@ -193,6 +197,11 @@ function renderInlineMarkdown(value) {
   };
 
   text = text.replace(/`([^`\n]+)`/g, (_, code) => addToken(`<code>${escapeHtml(code)}</code>`));
+  text = text.replace(/\[\[([^\]\|\n]+)(?:\|([^\]\n]+))?\]\]/g, (_, slug, label) => {
+    const cleanSlug = String(slug || "").trim();
+    if (!cleanSlug) return label || slug;
+    return addToken(`<button class="wiki-inline-link" data-wiki-slug="${escapeHtml(cleanSlug)}">${escapeHtml(label || cleanSlug)}</button>`);
+  });
   text = text.replace(/(\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|\$[^$\n]+?\$)/g, (match) => addToken(escapeHtml(match)));
   text = text.replace(/\\%/g, "%");
   text = text.replace(/\\href\s*\{([^{}]+)\}\s*\{([^{}]+)\}/g, (_, url, label) => addLinkToken(url, label));
@@ -427,10 +436,6 @@ function scoreClass(value) {
   return "score-muted";
 }
 
-function itemReason(item) {
-  return item.relevance_reason || (item.metadata && item.metadata.aihot_reason) || "";
-}
-
 function renderItem(item, mode = "radar") {
   const selected = state.selectedItem && state.selectedItem.id === item.id ? " selected" : "";
   const scoreValue = formatScore(item.score);
@@ -438,7 +443,6 @@ function renderItem(item, mode = "radar") {
   const tags = visibleTags(item.tags).slice(0, 6).map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("");
   const summary = item.display_summary || item.summary_zh || "中文摘要生成中，请稍后刷新。";
   const facts = renderItemFacts(item);
-  const reason = itemReason(item);
   return `
     <article class="item-card${selected}" data-id="${escapeHtml(item.id)}" data-type="${escapeHtml(item.source_type || "")}" tabindex="0">
       <div class="item-meta">
@@ -451,7 +455,6 @@ function renderItem(item, mode = "radar") {
       <h3>${escapeHtml(item.title)}</h3>
       <p class="rich-text">${renderRichText(summary, mode === "digest" ? 260 : 320)}</p>
       <div class="tags">${tags}</div>
-      ${reason ? `<div class="item-reason"><span>推荐理由</span>${escapeHtml(truncate(reason, 170))}</div>` : ""}
     </article>
   `;
 }
@@ -507,9 +510,6 @@ function selectItem(item) {
 function renderDetailReasons(item) {
   const target = $("detailReasons");
   const rows = [];
-  if (item.relevance_reason) {
-    rows.push(["推荐理由", item.relevance_reason]);
-  }
   if (item.recommended_action) {
     rows.push(["建议动作", item.recommended_action]);
   }
@@ -837,6 +837,7 @@ async function loadNotes() {
   renderKnowledgeQueue(data.items || []);
   renderConversations(data.conversations || []);
   renderNotes(data.notes || []);
+  renderWiki(data.wiki_pages || [], data.wiki_log || []);
   await loadKnowledgeGraph();
 }
 
@@ -987,6 +988,119 @@ function renderNotes(notes) {
   typesetMath($("notesList"));
 }
 
+function renderWiki(pages, logRows) {
+  state.wiki.pages = pages;
+  if (!state.wiki.activeSlug && pages.length) {
+    const overview = pages.find((page) => page.slug === "overview") || pages[0];
+    state.wiki.activeSlug = overview.slug;
+  }
+  renderWikiPages(pages);
+  renderWikiReader(pages.find((page) => page.slug === state.wiki.activeSlug) || pages[0]);
+  renderWikiLog(logRows || []);
+}
+
+function renderWikiPages(pages) {
+  const groups = groupBy(pages, (page) => page.page_type || "other");
+  const order = [
+    ["index", "目录"],
+    ["overview", "总览"],
+    ["concept", "概念"],
+    ["source", "来源"],
+    ["other", "其他"],
+  ];
+  $("wikiPages").innerHTML =
+    order
+      .map(([key, label]) => {
+        const items = groups.get(key) || [];
+        if (!items.length) return "";
+        return `
+          <section class="wiki-group">
+            <h4>${escapeHtml(label)}</h4>
+            ${items
+              .map((page) => `
+                <button class="wiki-page-link${page.slug === state.wiki.activeSlug ? " active" : ""}" data-slug="${escapeHtml(page.slug)}">
+                  <span>${escapeHtml(page.title)}</span>
+                  <small>${escapeHtml(page.summary || page.slug)}</small>
+                </button>
+              `)
+              .join("")}
+          </section>
+        `;
+      })
+      .join("") || `<div class="empty-state compact-empty">还没有 wiki 页面。</div>`;
+  $("wikiPages").querySelectorAll(".wiki-page-link").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.wiki.activeSlug = button.dataset.slug;
+      renderWikiPages(state.wiki.pages);
+      renderWikiReader(state.wiki.pages.find((page) => page.slug === state.wiki.activeSlug));
+    });
+  });
+}
+
+function renderWikiReader(page) {
+  if (!page) {
+    $("wikiReader").innerHTML = `<div class="empty-state">选择一页 wiki，或点击“编译知识库”。</div>`;
+    return;
+  }
+  $("wikiReader").innerHTML = `
+    <div class="wiki-reader-head">
+      <span class="pill">${escapeHtml(wikiTypeLabel(page.page_type))}</span>
+      <span class="muted">${escapeHtml(formatDate(page.updated_at, "full"))}</span>
+    </div>
+    <h3>${escapeHtml(page.title)}</h3>
+    ${page.summary ? `<p class="wiki-summary">${escapeHtml(page.summary)}</p>` : ""}
+    <div class="rich-text markdown-body wiki-content">${renderMarkdown(page.content)}</div>
+    <div class="tags">${visibleTags(page.tags).map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}</div>
+  `;
+  bindWikiReaderLinks($("wikiReader"));
+  typesetMath($("wikiReader"));
+}
+
+function bindWikiReaderLinks(container) {
+  container.querySelectorAll(".wiki-inline-link").forEach((button) => {
+    button.addEventListener("click", () => {
+      const slug = button.dataset.wikiSlug;
+      const page = state.wiki.pages.find((candidate) => candidate.slug === slug);
+      if (!page) return;
+      state.wiki.activeSlug = slug;
+      renderWikiPages(state.wiki.pages);
+      renderWikiReader(page);
+    });
+  });
+}
+
+function renderWikiLog(rows) {
+  $("wikiLog").innerHTML =
+    rows
+      .slice(0, 12)
+      .map((row) => `
+        <div class="wiki-log-row">
+          <span>${escapeHtml(formatDate(row.created_at, "full"))}</span>
+          <strong>${escapeHtml(row.title)}</strong>
+          <p>${escapeHtml(row.detail || row.event_type || "")}</p>
+        </div>
+      `)
+      .join("") || `<div class="empty-state compact-empty">暂无编译日志。</div>`;
+}
+
+function wikiTypeLabel(type) {
+  if (type === "index") return "目录";
+  if (type === "overview") return "总览";
+  if (type === "concept") return "概念";
+  if (type === "source") return "来源";
+  return "Wiki";
+}
+
+function groupBy(items, keyFn) {
+  const map = new Map();
+  for (const item of items || []) {
+    const key = keyFn(item);
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(item);
+  }
+  return map;
+}
+
 async function loadKnowledgeGraph() {
   const data = await api(`/api/knowledge/graph?user_id=${encodeURIComponent(state.profile)}&limit=90`);
   renderKnowledgeGraph(data);
@@ -1010,6 +1124,7 @@ function renderKnowledgeGraph(graph) {
     ...node,
     tags: visibleTags(node.tags),
     weight: Number(node.weight || 14),
+    node_type: node.node_type || "item",
     x: 0, y: 0, vx: 0, vy: 0,
   }));
   const nodeMap = new Map(nodes.map((node) => [node.id, node]));
@@ -1022,7 +1137,8 @@ function renderKnowledgeGraph(graph) {
   state.graph.activeNode = null;
   state.graph.tick = 0;
   state.graph.settled = false;
-  $("knowledgeGraphMeta").textContent = `${nodes.length} 个节点 · ${edges.length} 条关系`;
+  const stats = graph.stats || {};
+  $("knowledgeGraphMeta").textContent = `${stats.topic_count || 0} 个概念 · ${stats.source_count || 0} 个来源 · ${nodes.length} 个节点`;
   if (state.graph.animation) cancelAnimationFrame(state.graph.animation);
   state.graph.animation = null;
   bindGraphCanvas(canvas);
@@ -1041,6 +1157,7 @@ function bindGraphCanvas(canvas) {
     const changed = (state.graph.activeNode && state.graph.activeNode.id) !== (next && next.id);
     state.graph.activeNode = next;
     canvas.style.cursor = next ? "pointer" : "default";
+    renderGraphTip(event, next);
     if (changed && state.graph.settled) {
       drawGraphEnhanced(canvas.getContext("2d"), canvas, state.graph.nodes, state.graph.edges);
     }
@@ -1048,17 +1165,39 @@ function bindGraphCanvas(canvas) {
   canvas.addEventListener("mouseleave", () => {
     state.graph.activeNode = null;
     canvas.style.cursor = "default";
+    renderGraphTip(null, null);
     if (state.graph.settled) {
       drawGraphEnhanced(canvas.getContext("2d"), canvas, state.graph.nodes, state.graph.edges);
     }
   });
   canvas.addEventListener("click", () => {
     const node = state.graph.activeNode;
-    if (!node) return;
+    if (!node || node.node_type !== "item") return;
     api(`/api/items/${node.id}?user_id=${encodeURIComponent(state.profile)}`)
       .then((detail) => selectItem({ ...node, ...detail }))
       .catch(showError);
   });
+}
+
+function renderGraphTip(event, node) {
+  const tip = $("knowledgeGraphTip");
+  if (!tip) return;
+  if (!event || !node) {
+    tip.classList.add("hidden");
+    tip.innerHTML = "";
+    return;
+  }
+  const shell = $("knowledgeGraph").parentElement;
+  const shellRect = shell.getBoundingClientRect();
+  const left = clampNumber(event.clientX - shellRect.left + 14, 12, shellRect.width - 250);
+  const top = clampNumber(event.clientY - shellRect.top + 14, 12, shellRect.height - 110);
+  tip.style.left = `${left}px`;
+  tip.style.top = `${top}px`;
+  tip.innerHTML = `
+    <strong>${escapeHtml(node.title || node.label)}</strong>
+    <span>${escapeHtml(graphNodeKindLabel(node))}${node.count ? ` · ${escapeHtml(node.count)} 条` : ""}</span>
+  `;
+  tip.classList.remove("hidden");
 }
 
 // ── Graph: set initial cluster positions (physics handles refinement) ──
@@ -1066,11 +1205,15 @@ function initGraphPositions(canvas, nodes) {
   const W = state.graph.logW || canvas.width;
   const H = state.graph.logH || canvas.height;
   const centers = {
-    paper:        { x: W * 0.62, y: H * 0.42 },
-    repo:         { x: W * 0.28, y: H * 0.62 },
-    discussion:   { x: W * 0.70, y: H * 0.68 },
-    blog:         { x: W * 0.36, y: H * 0.28 },
-    cn_community: { x: W * 0.54, y: H * 0.76 },
+    topic:        { x: W * 0.50, y: H * 0.42 },
+    source:       { x: W * 0.22, y: H * 0.52 },
+    item:         { x: W * 0.68, y: H * 0.56 },
+    paper:        { x: W * 0.68, y: H * 0.42 },
+    repo:         { x: W * 0.70, y: H * 0.68 },
+    discussion:   { x: W * 0.58, y: H * 0.72 },
+    blog:         { x: W * 0.32, y: H * 0.30 },
+    cn_community: { x: W * 0.44, y: H * 0.74 },
+    signal:       { x: W * 0.30, y: H * 0.68 },
     other:        { x: W * 0.50, y: H * 0.50 },
   };
   const groups = new Map();
@@ -1159,12 +1302,12 @@ function drawGraphEnhanced(ctx, canvas, nodes, edges) {
   const H = state.graph.logH || canvas.height;
   ctx.save();
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // HiDPI scale
-  // Fill dark background
-  ctx.fillStyle = "#0d1117";
+  ctx.fillStyle = "#fbfaf7";
   ctx.fillRect(0, 0, W, H);
+  drawGraphGrid(ctx, W, H);
 
   if (!nodes.length) {
-    ctx.fillStyle = "rgba(148,163,184,.55)";
+    ctx.fillStyle = "rgba(120,113,108,.72)";
     ctx.font = "14px system-ui, -apple-system, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
@@ -1183,7 +1326,6 @@ function drawGraphEnhanced(ctx, canvas, nodes, edges) {
     }
   }
 
-  // Draw edges — curved bezier
   ctx.save();
   ctx.lineCap = "round";
   for (const e of edges) {
@@ -1191,11 +1333,11 @@ function drawGraphEnhanced(ctx, canvas, nodes, edges) {
     const isActive = activeId && (a.id === activeId || b.id === activeId);
     const dim = activeId && !nbSet.has(a.id) && !nbSet.has(b.id);
     const w = Math.min(e.weight || 1, 5);
-    const alpha = dim ? 0.025 : isActive ? 0.65 : 0.055 + w * 0.04;
+    const alpha = dim ? 0.04 : isActive ? 0.72 : 0.16 + w * 0.025;
     const mx = (a.x + b.x) / 2 + (b.y - a.y) * 0.09;
     const my = (a.y + b.y) / 2 - (b.x - a.x) * 0.09;
     ctx.globalAlpha = alpha;
-    ctx.strokeStyle = isActive ? "#2dd4bf" : "#94a3b8";
+    ctx.strokeStyle = isActive ? "#0d9488" : graphEdgeColor(e);
     ctx.lineWidth = isActive ? Math.min(2.8, 1 + w * 0.28) : Math.min(1.6, 0.4 + w * 0.15);
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
@@ -1205,7 +1347,6 @@ function drawGraphEnhanced(ctx, canvas, nodes, edges) {
   ctx.globalAlpha = 1;
   ctx.restore();
 
-  // Draw nodes — sorted so active is on top
   const sorted = [...nodes].sort((a, b) => {
     if (a.id === activeId) return 1;
     if (b.id === activeId) return -1;
@@ -1220,16 +1361,14 @@ function drawGraphEnhanced(ctx, canvas, nodes, edges) {
     ctx.save();
     ctx.globalAlpha = dim ? 0.2 : 1;
 
-    // Glow shadow
     if (isActive) {
       ctx.shadowColor = graphNodeGlow(node.source_type);
-      ctx.shadowBlur = 22;
+      ctx.shadowBlur = 18;
     } else if (isNb) {
       ctx.shadowColor = graphNodeGlow(node.source_type);
-      ctx.shadowBlur = 10;
+      ctx.shadowBlur = 8;
     }
 
-    // Radial gradient fill
     const grd = ctx.createRadialGradient(node.x - r * 0.32, node.y - r * 0.36, r * 0.05, node.x, node.y, r * 1.12);
     grd.addColorStop(0,   graphNodeHi(node.source_type));
     grd.addColorStop(0.6, graphNodeMid(node.source_type));
@@ -1239,13 +1378,11 @@ function drawGraphEnhanced(ctx, canvas, nodes, edges) {
     ctx.fillStyle = grd;
     ctx.fill();
 
-    // White ring
     ctx.lineWidth  = isActive ? 2.5 : isNb ? 2 : 1.5;
-    ctx.strokeStyle = isActive ? "rgba(255,255,255,.9)" : "rgba(255,255,255,.55)";
+    ctx.strokeStyle = isActive ? "#0f766e" : "rgba(255,255,255,.95)";
     ctx.shadowBlur = 0;
     ctx.stroke();
 
-    // Outer accent ring for active
     if (isActive) {
       ctx.lineWidth = 4;
       ctx.strokeStyle = graphNodeGlow(node.source_type);
@@ -1257,8 +1394,7 @@ function drawGraphEnhanced(ctx, canvas, nodes, edges) {
     }
     ctx.restore();
 
-    // Label — pill background
-    if (!isActive && r < 11) continue;
+    if (!isActive && node.node_type === "item" && r < 12) continue;
     const raw = node.label || "";
     const maxLen = isActive ? 22 : 16;
     const lbl = raw.length > maxLen ? raw.slice(0, maxLen - 1) + "…" : raw;
@@ -1277,17 +1413,36 @@ function drawGraphEnhanced(ctx, canvas, nodes, edges) {
     const rw = tw + px * 2;
     const rh = fs + py * 2;
     // Pill bg
-    ctx.fillStyle = isActive ? "rgba(13,20,32,.9)" : "rgba(255,255,255,.82)";
+    ctx.fillStyle = isActive ? "rgba(255,255,255,.98)" : "rgba(255,255,255,.86)";
     ctx.shadowColor = "rgba(0,0,0,.18)";
     ctx.shadowBlur = 5;
     graphRoundRect(ctx, rx, ry, rw, rh, 5);
     ctx.fill();
     ctx.shadowBlur = 0;
-    ctx.fillStyle = isActive ? "#5eead4" : "#e2e8f0";
+    ctx.fillStyle = isActive ? "#0f766e" : "#292524";
     ctx.fillText(lbl, node.x, labelY);
     ctx.restore();
   }
 
+  ctx.restore();
+}
+
+function drawGraphGrid(ctx, W, H) {
+  ctx.save();
+  ctx.strokeStyle = "rgba(214,211,209,.42)";
+  ctx.lineWidth = 1;
+  for (let x = 40; x < W; x += 80) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, H);
+    ctx.stroke();
+  }
+  for (let y = 40; y < H; y += 80) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(W, y);
+    ctx.stroke();
+  }
   ctx.restore();
 }
 
@@ -1306,10 +1461,14 @@ function graphRoundRect(ctx, x, y, w, h, r) {
 }
 
 function graphRadius(node) {
-  return Math.max(8, Math.min(22, Number(node.weight || 14) / 1.7));
+  if (node.node_type === "topic") return Math.max(15, Math.min(28, Number(node.weight || 22) / 1.55));
+  if (node.node_type === "source") return Math.max(12, Math.min(23, Number(node.weight || 18) / 1.7));
+  return Math.max(7, Math.min(17, Number(node.weight || 14) / 1.9));
 }
 
 function graphGroup(node) {
+  if (node.node_type === "topic") return "topic";
+  if (node.node_type === "source") return "source";
   return ["paper", "repo", "discussion", "blog", "cn_community", "signal"].includes(node.source_type)
     ? node.source_type : "other";
 }
@@ -1323,6 +1482,8 @@ function hashValue(value) {
 
 // Node colour ramps (hi / mid / lo / glow) on dark canvas
 function graphNodeHi(t) {
+  if (t === "topic") return "#fef3c7";
+  if (t === "source_hub") return "#ddd6fe";
   if (t === "paper")        return "#7dd3fc";
   if (t === "repo")         return "#86efac";
   if (t === "discussion")   return "#fde68a";
@@ -1332,6 +1493,8 @@ function graphNodeHi(t) {
   return "#cbd5e1";
 }
 function graphNodeMid(t) {
+  if (t === "topic") return "#f59e0b";
+  if (t === "source_hub") return "#8b5cf6";
   if (t === "paper")        return "#0ea5e9";
   if (t === "repo")         return "#22c55e";
   if (t === "discussion")   return "#f59e0b";
@@ -1341,6 +1504,8 @@ function graphNodeMid(t) {
   return "#94a3b8";
 }
 function graphNodeLo(t) {
+  if (t === "topic") return "#b45309";
+  if (t === "source_hub") return "#6d28d9";
   if (t === "paper")        return "#0369a1";
   if (t === "repo")         return "#15803d";
   if (t === "discussion")   return "#92400e";
@@ -1350,6 +1515,8 @@ function graphNodeLo(t) {
   return "#334155";
 }
 function graphNodeGlow(t) {
+  if (t === "topic") return "rgba(245,158,11,.55)";
+  if (t === "source_hub") return "rgba(139,92,246,.55)";
   if (t === "paper")        return "rgba(14,165,233,.75)";
   if (t === "repo")         return "rgba(34,197,94,.75)";
   if (t === "discussion")   return "rgba(245,158,11,.75)";
@@ -1357,6 +1524,20 @@ function graphNodeGlow(t) {
   if (t === "cn_community") return "rgba(167,139,250,.75)";
   if (t === "signal") return "rgba(6,182,212,.75)";
   return "rgba(148,163,184,.6)";
+}
+
+function graphEdgeColor(edge) {
+  const reason = edge.reasons && edge.reasons[0];
+  if (reason && reason.kind === "tag") return "#d97706";
+  if (reason && reason.kind === "source") return "#8b5cf6";
+  if (reason && reason.kind === "co_topic") return "#0d9488";
+  return "#a8a29e";
+}
+
+function graphNodeKindLabel(node) {
+  if (node.node_type === "topic") return "概念";
+  if (node.node_type === "source") return "来源";
+  return typeLabel(node.source_type);
 }
 
 function bindDeleteActions(container) {
@@ -1398,6 +1579,24 @@ async function deleteNote(noteId) {
   await api(`/api/notes/${encodeURIComponent(noteId)}?user_id=${encodeURIComponent(state.profile)}`, { method: "DELETE" });
   showToast("笔记已删除");
   await loadNotes();
+}
+
+async function compileWiki() {
+  const button = $("compileWikiBtn");
+  if (!button) return;
+  button.disabled = true;
+  button.textContent = "编译中";
+  try {
+    const data = await api("/api/knowledge/compile", {
+      method: "POST",
+      body: JSON.stringify({ user_id: state.profile, limit: 90 }),
+    });
+    renderWiki(data.pages || [], data.wiki_log || []);
+    showToast("知识库已编译");
+  } finally {
+    button.disabled = false;
+    button.textContent = "编译知识库";
+  }
 }
 
 async function refreshView() {
@@ -1587,6 +1786,7 @@ function bindEvents() {
   });
   $("askBtn").addEventListener("click", () => askQuestion().catch(showError));
   $("saveItemNote").addEventListener("click", () => saveItemNote().catch(showError));
+  $("compileWikiBtn").addEventListener("click", () => compileWiki().catch(showError));
 }
 
 async function init() {

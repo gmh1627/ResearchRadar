@@ -25,7 +25,7 @@ SOURCE_AUTHORITY = {
 }
 
 ACTION_TAGS = {"Agent", "Tool Use", "Memory", "Evaluation", "Code Agent", "Self-Improvement"}
-AIHOT_TAGS = {"AIHOT线索"}
+AIHOT_TAGS = {"AIHOT精选"}
 SOURCE_TIER_BONUS = {
     "T1": 0.12,
     "T1_5": 0.07,
@@ -397,7 +397,7 @@ def build_relevance_reason(item: dict[str, Any], profile: dict[str, Any], parts:
         return str(item["relevance_reason"])
     aihot_reason = metadata.get("aihot_reason")
     if aihot_reason:
-        return "AIHOT 推荐理由：" + str(aihot_reason)
+        return "AIHOT 摘要：" + str(aihot_reason)
     if item.get("source_id") == "aihot_public" and metadata.get("aihot_category_label"):
         return "来自 AIHOT 精选 API，分类为：" + str(metadata["aihot_category_label"])
     if parts.get("personalization", 0) >= 0.35:
@@ -412,7 +412,7 @@ def build_relevance_reason(item: dict[str, Any], profile: dict[str, Any], parts:
     if item.get("evidence_role") == "official_update":
         return "来自重要公司或实验室官方信息源，适合作为研究动态补充。"
     if item.get("evidence_role") == "curated_secondary_signal":
-        return "来自外部精选信息流，适合作为早期线索，建议打开原始来源核验。"
+        return "来自外部精选信息流，适合作为早期发现入口，建议打开原始来源核验。"
     return "进入近期 AI 信息池，可作为快速浏览项。"
 
 
@@ -424,8 +424,8 @@ def recommended_action(item: dict[str, Any], parts: dict[str, float]) -> str:
         return str(item["recommended_action"])
     if item.get("source_id") == "aihot_public":
         if item.get("metadata", {}).get("aihot_reason"):
-            return "把它当作二级线索：先看 AIHOT 摘要和推荐理由，再打开原始链接核验。"
-        return "把它当作二级线索：先看 AIHOT 摘要和分类，再打开原始链接核验。"
+            return "把它当作外部精选：先看 AIHOT 摘要，再打开原始链接核验。"
+        return "把它当作外部精选：先看 AIHOT 摘要和分类，再打开原始链接核验。"
     if item.get("source_type") == "paper" and parts["relevance"] >= 0.45:
         return "先读 abstract 和 method；若与当前课题相关，再加入深读列表。"
     if item.get("source_id") == "github":

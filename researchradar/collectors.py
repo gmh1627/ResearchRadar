@@ -76,7 +76,7 @@ class Collector:
                 return CollectResult(source_id, "skipped", [])
             kind = source.get("type")
             if kind == "arxiv":
-                items = await self.collect_arxiv(source, target)
+                return await self.collect_arxiv_result(source, target)
             elif kind == "rss":
                 items = await self.collect_rss(source, target)
             elif kind == "page":
@@ -246,22 +246,44 @@ class Collector:
                     )
         return CollectResult("hackernews", "success", dedupe_items(items)[: self.max_items])
 
-    async def collect_arxiv(self, source: dict[str, Any], target: date) -> list[dict[str, Any]]:
-        items = []
+    async def collect_arxiv_result(self, source: dict[str, Any], target: date) -> CollectResult:
+        source_id = source["id"]
+        items: list[dict[str, Any]] = []
+        errors: list[str] = []
+
         try:
             core_query = self.build_arxiv_query(source.get("categories", []), [], target)
             items.extend(await self.fetch_arxiv_query(source, core_query))
-            conditional_categories = source.get("conditional_categories", [])
-            conditional_keywords = source.get("conditional_keywords", [])
-            if conditional_categories and conditional_keywords:
+        except Exception as exc:
+            errors.append(f"core API failed: {exc}")
+
+        conditional_categories = source.get("conditional_categories", [])
+        conditional_keywords = source.get("conditional_keywords", [])
+        if conditional_categories and conditional_keywords:
+            try:
                 conditional_query = self.build_arxiv_query(conditional_categories, conditional_keywords, target)
                 items.extend(await self.fetch_arxiv_query(source, conditional_query))
-            items = dedupe_items(items)
-            if items:
-                return items
-        except Exception:
-            items = []
-        return await self.collect_arxiv_recent_pages(source, target)
+            except Exception as exc:
+                errors.append(f"conditional API failed: {exc}")
+
+        items = dedupe_items(items)
+        if not errors:
+            return CollectResult(source_id, "success", items)
+
+        try:
+            items = dedupe_items(items + await self.collect_arxiv_recent_pages(source, target))
+        except Exception as exc:
+            errors.append(f"recent-page fallback failed: {exc}")
+
+        if items:
+            return CollectResult(source_id, "partial", items, "; ".join(errors))
+        return CollectResult(source_id, "error", [], "; ".join(errors))
+
+    async def collect_arxiv(self, source: dict[str, Any], target: date) -> list[dict[str, Any]]:
+        result = await self.collect_arxiv_result(source, target)
+        if result.status == "error":
+            raise RuntimeError(result.error or "arXiv collection failed")
+        return result.items
 
     def build_arxiv_query(self, categories: list[str], keywords: list[str], target: date) -> str:
         category_query = " OR ".join(f"cat:{category}" for category in categories)
@@ -599,7 +621,7 @@ class Collector:
                 source_reliability=source.get("reliability", "medium"),
                 evidence_role=source.get("evidence_role", "curated_secondary_signal"),
                 metadata=metadata,
-                extra_tags=["AIHOT线索", *tags],
+                extra_tags=["AIHOT精选", *tags],
             )
             if contains_cjk(item["summary"]):
                 item["summary_zh"] = item["summary"]
@@ -665,7 +687,7 @@ class Collector:
                     source_reliability=source.get("reliability", "medium"),
                     evidence_role=source.get("evidence_role", "curated_secondary_signal"),
                     metadata=metadata,
-                    extra_tags=["AIHOT线索", *tags],
+                    extra_tags=["AIHOT精选", *tags],
                 )
                 if contains_cjk(item["summary"]):
                     item["summary_zh"] = item["summary"]

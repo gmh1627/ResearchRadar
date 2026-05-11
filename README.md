@@ -5,7 +5,7 @@ ResearchRadar is a local browser-based personal AI research source agent. It cra
 ## Current Capabilities
 
 - Daily catch-up crawler with per-source run status and partial-failure reporting.
-- AIHOT public API source for curated X/KOL/product signals that ResearchRadar cannot collect directly.
+- AIHOT public API source for curated X/KOL/product updates that ResearchRadar cannot collect directly.
 - GPT-5.5 post-collection relevance filtering, Chinese summary generation, five-dimension analysis, and code-side final scoring.
 - Categorized personal digest ranked by research profile, source authority, recency, trend signals, and user feedback, capped by `ranking.digest_max_items`.
 - Feedback learning across similar tags and sources, not only the exact same item.
@@ -60,10 +60,10 @@ from those dimensions plus source authority, trend, recency, and user feedback.
 
 ## Crawling Behavior
 
-- Server startup initializes the database and scheduler, but does not run catch-up automatically, so the dashboard remains responsive after restart.
+- Server startup initializes the database and scheduler, then runs a background catch-up to repair missed days and recent arXiv gaps.
 - Manual `crawl` and scheduled daily crawls run the GPT-5.5 post-process after collection.
 - `catch-up` is still available as a CLI command for missed days, but intentionally skips the GPT-5.5 post-process to avoid a large surprise model bill.
-- While running, it crawls every day at `crawl.daily_time` in `crawl.timezone` (currently 08:40 Asia/Shanghai) and fetches the previous calendar day.
+- While running, it crawls every day at `crawl.daily_time` in `crawl.daily_time_timezone` (currently 20:10 America/New_York, about ten minutes after arXiv announcements) and fetches that announcement date.
 - AIHOT is configured through `config/sources.yaml` as `aihot_public`, using `https://aihot.virxact.com/api/public/items` with `mode=selected`.
 - Each source run records `success`, `partial`, `skipped`, or `error`; a daily crawl is marked `partial` if any enabled source degrades or fails.
 - Undated page items are sorted by first-discovered time and labeled that way in the UI, so old pages are not silently treated as fresh publications.

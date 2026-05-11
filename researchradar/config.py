@@ -60,6 +60,11 @@ class AppConfig:
         return str(self.settings.get("crawl", {}).get("daily_time", "07:30"))
 
     @property
+    def daily_time_timezone(self) -> str:
+        crawl = self.settings.get("crawl", {})
+        return str(crawl.get("daily_time_timezone", crawl.get("timezone", "Asia/Shanghai")))
+
+    @property
     def initial_backfill_days(self) -> int:
         return int(self.settings.get("crawl", {}).get("initial_backfill_days", 14))
 

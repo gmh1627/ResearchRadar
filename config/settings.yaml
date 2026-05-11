@@ -4,10 +4,14 @@ server:
 
 crawl:
   timezone: "Asia/Shanghai"
-  daily_time: "08:40"
+  # arXiv announces new submissions around 20:00 US Eastern on announcement days.
+  daily_time_timezone: "America/New_York"
+  daily_time: "20:10"
   initial_backfill_days: 14
   request_timeout_seconds: 25
   max_items_per_source: 80
+  source_gap_repair_days: 10
+  source_gap_repair_min_items: 20
   arxiv_page_size: 200
   arxiv_max_results_per_run: 1500
   user_agent: "ResearchRadar/0.1 (+local personal research agent)"

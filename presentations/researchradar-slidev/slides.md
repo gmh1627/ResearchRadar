@@ -49,7 +49,7 @@ AI 研究信息流现在有三个实际问题：
 - 每日抓取并入库
 - 用 GPT-5.5 做后处理判断
 - 用代码公式做最终排序
-- 保留证据链接和推荐理由
+- 保留证据链接、摘要和后续建议
 - 把阅读、收藏、问答、笔记沉淀为知识库
 
 ---
@@ -61,7 +61,7 @@ AI 研究信息流现在有三个实际问题：
   <div><strong>1518</strong><span>Hacker News 工程讨论</span></div>
   <div><strong>280</strong><span>公司与实验室博客</span></div>
   <div><strong>258</strong><span>GitHub 趋势项目</span></div>
-  <div><strong>64</strong><span>AIHOT 外部精选线索</span></div>
+  <div><strong>64</strong><span>AIHOT 外部精选</span></div>
   <div><strong>49</strong><span>中文社区内容</span></div>
 </div>
 
@@ -78,8 +78,8 @@ image: /dashboard.png
 
 日报不是简单按时间排序，而是按研究画像和信源质量重排。
 
-- 分区展示：重点论文、官方动态、代码工具、社区讨论、外部精选线索
-- 每条都有质量分、标签、摘要、推荐理由
+- 分区展示：重点论文、官方动态、代码工具、社区讨论、外部精选
+- 每条都有质量分、标签和摘要
 - 右侧证据卡用于查看来源、PDF、HN、AIHOT 页等
 - 支持搜索、筛选、分页和反馈
 
@@ -91,7 +91,7 @@ image: /dashboard.png
   <div><b>1</b><span>抓取</span><small>RSS / Page / arXiv / GitHub / HN / AIHOT API</small></div>
   <div><b>2</b><span>规范化</span><small>统一 item schema、去重、时间语义、证据角色</small></div>
   <div><b>3</b><span>GPT-5.5 预筛</span><small>过滤非 AI / 低相关内容</small></div>
-  <div><b>4</b><span>GPT-5.5 分析</span><small>中文摘要、标签、五维度、推荐理由</small></div>
+  <div><b>4</b><span>GPT-5.5 分析</span><small>中文摘要、标签、五维度、后续建议</small></div>
   <div><b>5</b><span>代码排序</span><small>权威度、趋势、时效、用户反馈合成最终分</small></div>
 </div>
 
@@ -119,7 +119,7 @@ ResearchRadar 的大模型使用方式采用“模型给维度，代码做决策
 <div class="llm-grid">
   <div>
     <h3>模型做什么</h3>
-    <p>相关性预筛、中文摘要、标签、五维度评分、推荐理由、下一步建议。</p>
+    <p>相关性预筛、中文摘要、标签、五维度评分和下一步建议。</p>
   </div>
   <div>
     <h3>模型不做什么</h3>
@@ -212,7 +212,7 @@ image: /sources.png
 
 需要明确的限制：
 
-- AIHOT 信源是二级线索，最终仍要打开原始来源核验。
+- AIHOT 信源是外部精选，最终仍要打开原始来源核验。
 - X.com 仍未直接抓取，AIHOT 只是补足一部分高价值信号。
 - GPT-5.5 后处理按批执行，有成本和延迟，需要控制 `limit`、`days`。
 - 网络不可用时爬取会失败，但会记录为 source status，不会伪造新内容。

@@ -34,22 +34,68 @@ class CrawlManager:
 
     async def catch_up(self) -> None:
         today = datetime.now(ZoneInfo(self.config.timezone)).date()
-        successful = self.db.successful_days()
-        if not successful:
+        covered = self.db.covered_days()
+        if not covered:
             days = max(self.config.initial_backfill_days, 1)
             start = today - timedelta(days=days - 1)
             await self.crawl_range(start, today, run_postprocess=False)
+            await self.repair_recent_source_gaps(today, run_postprocess=False)
             return
 
         yesterday = today - timedelta(days=1)
         missing = []
-        cursor = min(yesterday, date.fromisoformat(max(successful)) + timedelta(days=1))
+        cursor = min(yesterday, date.fromisoformat(max(covered)) + timedelta(days=1))
         while cursor <= yesterday:
-            if cursor.isoformat() not in successful:
+            if cursor.isoformat() not in covered:
                 missing.append(cursor)
             cursor += timedelta(days=1)
         if missing:
             await self.crawl_dates(missing, run_postprocess=False)
+        await self.repair_recent_source_gaps(today, run_postprocess=False)
+
+    async def repair_recent_source_gaps(self, today: date | None = None, *, run_postprocess: bool = False) -> None:
+        arxiv_source = next((source for source in self.config.sources if source.get("id") == "arxiv_core" and source.get("enabled", True)), None)
+        if not arxiv_source:
+            return
+        local_today = today or datetime.now(ZoneInfo(self.config.timezone)).date()
+        yesterday = local_today - timedelta(days=1)
+        window_days = max(1, min(int(self.config.settings.get("crawl", {}).get("source_gap_repair_days", 10)), 31))
+        start = yesterday - timedelta(days=window_days - 1)
+        min_items = max(1, int(self.config.settings.get("crawl", {}).get("source_gap_repair_min_items", 20)))
+        dates_with_enough_items = self.db.dates_with_source_items("arxiv_core", start, yesterday, min_count=min_items)
+        dates = []
+        cursor = start
+        while cursor <= yesterday:
+            day_key = cursor.isoformat()
+            if day_key not in dates_with_enough_items:
+                dates.append(cursor)
+            cursor += timedelta(days=1)
+        if not dates:
+            return
+
+        async with self.lock:
+            self.status.update(
+                {
+                    "running": True,
+                    "message": f"repairing arXiv gaps ({len(dates)} day(s))",
+                    "last_started_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            try:
+                for index, target in enumerate(dates, start=1):
+                    self.status["message"] = f"repairing arXiv {target.isoformat()} ({index}/{len(dates)})"
+                    await self.run_config_source(arxiv_source, target)
+                if run_postprocess:
+                    await asyncio.to_thread(self.llm_postprocess_recent)
+                    await asyncio.to_thread(self.translate_recent_summaries)
+            finally:
+                self.status.update(
+                    {
+                        "running": False,
+                        "message": "idle",
+                        "last_finished_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
 
     async def crawl_range(self, start: date, end: date, *, run_postprocess: bool = True) -> None:
         days = []
@@ -160,9 +206,11 @@ class CrawlManager:
 
     async def scheduler_loop(self) -> None:
         while True:
-            await asyncio.sleep(seconds_until_next_run(self.config.timezone, self.config.daily_time))
-            target = datetime.now(ZoneInfo(self.config.timezone)).date() - timedelta(days=1)
+            run_tz_name = self.config.daily_time_timezone
+            await asyncio.sleep(seconds_until_next_run(run_tz_name, self.config.daily_time))
+            target = datetime.now(ZoneInfo(run_tz_name)).date()
             await self.crawl_dates([target], run_postprocess=True)
+            await self.repair_recent_source_gaps(run_postprocess=True)
 
     def translate_recent_summaries(self) -> None:
         try:

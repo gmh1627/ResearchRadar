@@ -105,6 +105,34 @@ class Database:
                     created_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS wiki_pages (
+                    user_id TEXT NOT NULL,
+                    slug TEXT NOT NULL,
+                    page_type TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    summary TEXT NOT NULL DEFAULT '',
+                    content TEXT NOT NULL,
+                    tags_json TEXT NOT NULL DEFAULT '[]',
+                    source_item_ids_json TEXT NOT NULL DEFAULT '[]',
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(user_id, slug)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_wiki_pages_user_type
+                ON wiki_pages(user_id, page_type, updated_at);
+
+                CREATE TABLE IF NOT EXISTS wiki_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    detail TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_wiki_log_user_created
+                ON wiki_log(user_id, created_at);
+
                 CREATE TABLE IF NOT EXISTS conversations (
                     id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL,
@@ -383,6 +411,54 @@ class Database:
         with self.connect() as conn:
             rows = conn.execute("SELECT target_date FROM crawl_days WHERE status='success'").fetchall()
         return {row["target_date"] for row in rows}
+
+    def covered_days(self) -> set[str]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT target_date
+                FROM crawl_days
+                WHERE status IN ('success', 'partial')
+                  AND items_found > 0
+                """
+            ).fetchall()
+        return {row["target_date"] for row in rows}
+
+    def dates_with_source_items(self, source_id: str, start: date, end: date, *, min_count: int = 1) -> set[str]:
+        date_expr = "date(COALESCE(published_at, collected_at))"
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT {date_expr} AS target_date
+                FROM items
+                WHERE source_id=?
+                  AND {date_expr} BETWEEN ? AND ?
+                GROUP BY target_date
+                HAVING COUNT(*) >= ?
+                """,
+                (source_id, start.isoformat(), end.isoformat(), max(1, min_count)),
+            ).fetchall()
+        return {row["target_date"] for row in rows if row["target_date"]}
+
+    def latest_successful_source_dates(self, source_id: str, start: date, end: date) -> set[str]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT sr.target_date
+                FROM source_runs sr
+                JOIN (
+                    SELECT target_date, MAX(id) AS max_id
+                    FROM source_runs
+                    WHERE source_id=?
+                      AND target_date BETWEEN ? AND ?
+                    GROUP BY target_date
+                ) latest
+                ON latest.max_id = sr.id
+                WHERE sr.status='success'
+                """,
+                (source_id, start.isoformat(), end.isoformat()),
+            ).fetchall()
+        return {row["target_date"] for row in rows if row["target_date"]}
 
     def last_successful_day(self) -> str | None:
         with self.connect() as conn:
@@ -837,6 +913,109 @@ class Database:
             conn.execute("DELETE FROM notes WHERE user_id=? AND id=?", (user_id, note_id))
             return conn.total_changes - before
 
+    def upsert_wiki_pages(self, user_id: str, pages: list[dict[str, Any]], *, event_title: str = "") -> int:
+        if not pages:
+            return 0
+        now = datetime.now(timezone.utc).isoformat()
+        rows = []
+        for page in pages:
+            slug = str(page.get("slug") or "").strip()
+            title = str(page.get("title") or "").strip()
+            content = str(page.get("content") or "").strip()
+            if not slug or not title or not content:
+                continue
+            rows.append(
+                {
+                    "user_id": user_id,
+                    "slug": slug,
+                    "page_type": str(page.get("page_type") or "concept"),
+                    "title": title,
+                    "summary": str(page.get("summary") or "").strip(),
+                    "content": content,
+                    "tags_json": encode_json(page.get("tags") or []),
+                    "source_item_ids_json": encode_json(page.get("source_item_ids") or []),
+                    "updated_at": now,
+                }
+            )
+        if not rows:
+            return 0
+        with self.connect() as conn:
+            before = conn.total_changes
+            conn.executemany(
+                """
+                INSERT INTO wiki_pages(
+                    user_id, slug, page_type, title, summary, content,
+                    tags_json, source_item_ids_json, updated_at
+                )
+                VALUES (
+                    :user_id, :slug, :page_type, :title, :summary, :content,
+                    :tags_json, :source_item_ids_json, :updated_at
+                )
+                ON CONFLICT(user_id, slug) DO UPDATE SET
+                    page_type=excluded.page_type,
+                    title=excluded.title,
+                    summary=excluded.summary,
+                    content=excluded.content,
+                    tags_json=excluded.tags_json,
+                    source_item_ids_json=excluded.source_item_ids_json,
+                    updated_at=excluded.updated_at
+                """,
+                rows,
+            )
+            if event_title:
+                conn.execute(
+                    """
+                    INSERT INTO wiki_log(user_id, event_type, title, detail, created_at)
+                    VALUES (?, 'compile', ?, ?, ?)
+                    """,
+                    (user_id, event_title, f"updated {len(rows)} wiki pages", now),
+                )
+            return conn.total_changes - before
+
+    def list_wiki_pages(self, user_id: str = "default") -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM wiki_pages
+                WHERE user_id=?
+                ORDER BY
+                    CASE page_type
+                        WHEN 'index' THEN 0
+                        WHEN 'overview' THEN 1
+                        WHEN 'concept' THEN 2
+                        WHEN 'source' THEN 3
+                        ELSE 4
+                    END,
+                    updated_at DESC,
+                    title ASC
+                """,
+                (user_id,),
+            ).fetchall()
+        return [decode_wiki_page(row) for row in rows]
+
+    def get_wiki_page(self, user_id: str, slug: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM wiki_pages WHERE user_id=? AND slug=?",
+                (user_id, slug),
+            ).fetchone()
+        return decode_wiki_page(row) if row else None
+
+    def list_wiki_log(self, user_id: str = "default", limit: int = 30) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM wiki_log
+                WHERE user_id=?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (user_id, max(1, limit)),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def knowledge_graph_items(self, user_id: str = "default", limit: int = 80) -> list[dict[str, Any]]:
         with self.connect() as conn:
             rows = conn.execute(
@@ -1028,6 +1207,13 @@ def decode_item(row: sqlite3.Row) -> dict[str, Any]:
     item["score_parts"] = json.loads(item.pop("score_parts_json", "{}") or "{}")
     item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
     return item
+
+
+def decode_wiki_page(row: sqlite3.Row) -> dict[str, Any]:
+    page = dict(row)
+    page["tags"] = json.loads(page.pop("tags_json") or "[]")
+    page["source_item_ids"] = json.loads(page.pop("source_item_ids_json") or "[]")
+    return page
 
 
 def content_fingerprint(item: dict[str, Any]) -> str:
