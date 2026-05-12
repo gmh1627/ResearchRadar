@@ -4,6 +4,10 @@ import json
 import re
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlparse
+
+import httpx
+from bs4 import BeautifulSoup
 
 from .db import Database
 from .llm import LLMCallError, generate_text_sync, resolve_llm_config
@@ -12,6 +16,9 @@ from .ranker import SOURCE_AUTHORITY, SOURCE_TIER_BONUS, clamp, recency_signal
 
 LLM_DIMENSIONS = ("relevance", "novelty", "significance", "actionability", "credibility")
 PIPELINE_MARKER = "llm_postprocess"
+ARTICLE_READING_MARKER = "article_reading"
+BLOG_SOURCE_TYPES = {"blog", "cn_community"}
+BLOG_EVIDENCE_ROLES = {"official_update", "lab_update", "cn_research_update"}
 AI_TAGS = [
     "LLM",
     "Agent",
@@ -52,6 +59,8 @@ def run_llm_postprocess(config, db: Database, *, limit: int | None = None, days:
     min_ai_confidence = float(post_cfg.get("min_ai_confidence", 0.55))
     prefilter_batch_size = max(1, int(post_cfg.get("prefilter_batch_size", 12)))
     analysis_batch_size = max(1, int(post_cfg.get("analysis_batch_size", 6)))
+    blog_analysis_batch_size = max(1, int(post_cfg.get("blog_analysis_batch_size", 2)))
+    rows = attach_article_reading(settings, rows, post_cfg, version)
 
     by_id = {row["id"]: row for row in rows}
     decisions: dict[str, dict[str, Any]] = {}
@@ -69,12 +78,18 @@ def run_llm_postprocess(config, db: Database, *, limit: int | None = None, days:
             continue
         relevant.append(row)
 
-    for batch in chunks(relevant, analysis_batch_size):
+    analyzed_ids = set()
+    for batch in chunks_by_article_weight(relevant, analysis_batch_size, blog_analysis_batch_size):
         analyses = analyze_batch(settings, model, batch, version)
         for item_id, analysis in analyses.items():
             row = by_id.get(item_id)
             if row:
                 updates.append(apply_analysis(row, analysis, version, model))
+                analyzed_ids.add(item_id)
+
+    for row in relevant:
+        if has_article_reading(row) and row["id"] not in analyzed_ids:
+            updates.append(apply_article_reading_only(row, version, model))
 
     db.update_llm_postprocess(updates)
     return len(updates)
@@ -119,6 +134,7 @@ def prefilter_batch(settings: dict[str, Any], model: str, rows: list[dict[str, A
 def analyze_batch(settings: dict[str, Any], model: str, rows: list[dict[str, Any]], version: str) -> dict[str, dict[str, Any]]:
     prompt = {
         "task": "为这些 AI 信息生成中文摘要并给五个维度打分。最终质量分不要给，最终分由代码公式计算。",
+        "content_rule": "若条目包含 article_excerpt，说明系统已经读取了技术博客/实验室动态正文摘录；生成摘要和判断时必须优先依据 article_excerpt，而不是只依赖 RSS 摘要。",
         "dimensions": {
             "relevance": "与 LLM、Agent、Reasoning、Tool Use、AI research/infra/product 动态的相关度",
             "novelty": "是否新发布、新方法、新数据、新产品、新趋势",
@@ -161,7 +177,8 @@ def analyze_batch(settings: dict[str, Any], model: str, rows: list[dict[str, Any
 
 def apply_non_ai_decision(row: dict[str, Any], decision: dict[str, Any], version: str, model: str) -> dict[str, Any]:
     metadata = dict(row.get("metadata") or {})
-    metadata[PIPELINE_MARKER] = {
+    previous_postprocess = metadata.get(PIPELINE_MARKER) or {}
+    next_postprocess = {
         "version": version,
         "model": model,
         "status": "filtered_non_ai",
@@ -169,6 +186,9 @@ def apply_non_ai_decision(row: dict[str, Any], decision: dict[str, Any], version
         "reason": str(decision.get("reason") or ""),
         "processed_at": datetime.now(timezone.utc).isoformat(),
     }
+    if isinstance(previous_postprocess, dict) and previous_postprocess.get(ARTICLE_READING_MARKER):
+        next_postprocess[ARTICLE_READING_MARKER] = previous_postprocess[ARTICLE_READING_MARKER]
+    metadata[PIPELINE_MARKER] = next_postprocess
     parts = {dimension: 0.0 for dimension in LLM_DIMENSIONS}
     parts.update({"authority": authority_signal(row), "recency": recency_signal(row), "negative_penalty": 0.0})
     return {
@@ -188,13 +208,17 @@ def apply_analysis(row: dict[str, Any], analysis: dict[str, Any], version: str, 
     summary_zh = str(analysis.get("summary_zh") or row.get("summary_zh") or row.get("summary") or "").strip()
     tags = merge_tags(row.get("tags", []), analysis.get("tags", []))
     metadata = dict(row.get("metadata") or {})
-    metadata[PIPELINE_MARKER] = {
+    previous_postprocess = metadata.get(PIPELINE_MARKER) or {}
+    next_postprocess = {
         "version": version,
         "model": model,
         "status": "analyzed",
         "dimensions": llm_scores,
         "processed_at": datetime.now(timezone.utc).isoformat(),
     }
+    if isinstance(previous_postprocess, dict) and previous_postprocess.get(ARTICLE_READING_MARKER):
+        next_postprocess[ARTICLE_READING_MARKER] = previous_postprocess[ARTICLE_READING_MARKER]
+    metadata[PIPELINE_MARKER] = next_postprocess
     return {
         **row,
         "summary_zh": summary_zh,
@@ -205,6 +229,26 @@ def apply_analysis(row: dict[str, Any], analysis: dict[str, Any], version: str, 
         "tags": tags,
         "metadata": metadata,
     }
+
+
+def apply_article_reading_only(row: dict[str, Any], version: str, model: str) -> dict[str, Any]:
+    metadata = dict(row.get("metadata") or {})
+    previous_postprocess = dict(metadata.get(PIPELINE_MARKER) or {})
+    reading = previous_postprocess.get(ARTICLE_READING_MARKER)
+    metadata[PIPELINE_MARKER] = {
+        "version": version,
+        "model": model,
+        "status": "article_read_pending_analysis",
+        "processed_at": datetime.now(timezone.utc).isoformat(),
+        ARTICLE_READING_MARKER: reading,
+    }
+    return {**row, "metadata": metadata}
+
+
+def has_article_reading(row: dict[str, Any]) -> bool:
+    metadata = row.get("metadata") or {}
+    postprocess = metadata.get(PIPELINE_MARKER) or {}
+    return isinstance(postprocess, dict) and bool(postprocess.get(ARTICLE_READING_MARKER))
 
 
 def score_parts(row: dict[str, Any], llm_scores: dict[str, float]) -> dict[str, float]:
@@ -271,7 +315,9 @@ def trend_signal(row: dict[str, Any]) -> float:
 
 def compact_item(row: dict[str, Any]) -> dict[str, Any]:
     metadata = row.get("metadata") or {}
-    return {
+    postprocess = metadata.get(PIPELINE_MARKER) or {}
+    reading = postprocess.get(ARTICLE_READING_MARKER) if isinstance(postprocess, dict) else {}
+    item = {
         "id": row.get("id"),
         "title": row.get("title"),
         "summary": truncate(row.get("summary") or row.get("summary_zh") or "", 900),
@@ -290,6 +336,151 @@ def compact_item(row: dict[str, Any]) -> dict[str, Any]:
             if metadata.get(key) is not None
         },
     }
+    if isinstance(reading, dict) and reading.get("excerpt"):
+        item["article_excerpt"] = truncate(reading.get("excerpt") or "", 2600)
+        item["article_reading"] = {
+            "status": reading.get("status"),
+            "chars": reading.get("chars"),
+            "source": reading.get("source"),
+        }
+    return item
+
+
+def attach_article_reading(
+    settings: dict[str, Any],
+    rows: list[dict[str, Any]],
+    post_cfg: dict[str, Any],
+    version: str,
+) -> list[dict[str, Any]]:
+    if not post_cfg.get("read_blog_pages", True):
+        return rows
+    max_items = max(0, int(post_cfg.get("blog_read_max_items_per_run", 24)))
+    if max_items <= 0:
+        return rows
+    timeout = max(2.0, float(post_cfg.get("blog_read_timeout_seconds", 8)))
+    max_chars = max(800, int(post_cfg.get("blog_read_max_chars", 6000)))
+    user_agent = str(settings.get("crawl", {}).get("user_agent") or "ResearchRadar/0.1 (+local personal research agent)")
+
+    out = []
+    read_count = 0
+    with httpx.Client(follow_redirects=True, timeout=timeout, headers={"User-Agent": user_agent}) as client:
+        for row in rows:
+            next_row = row
+            if read_count < max_items and should_read_article(row):
+                next_row = row_with_article_reading(client, row, version=version, max_chars=max_chars)
+                read_count += 1
+            out.append(next_row)
+    return out
+
+
+def should_read_article(row: dict[str, Any]) -> bool:
+    source_type = str(row.get("source_type") or "")
+    evidence_role = str(row.get("evidence_role") or "")
+    if source_type not in BLOG_SOURCE_TYPES and evidence_role not in BLOG_EVIDENCE_ROLES:
+        return False
+    url = str(row.get("url") or "").strip()
+    parsed = urlparse(url)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def row_with_article_reading(
+    client: httpx.Client,
+    row: dict[str, Any],
+    *,
+    version: str,
+    max_chars: int,
+) -> dict[str, Any]:
+    metadata = dict(row.get("metadata") or {})
+    postprocess = dict(metadata.get(PIPELINE_MARKER) or {})
+    existing = postprocess.get(ARTICLE_READING_MARKER)
+    if isinstance(existing, dict) and existing.get("version") == version and existing.get("excerpt"):
+        return row
+
+    reading = fetch_article_reading(client, str(row.get("url") or ""), version=version, max_chars=max_chars)
+    postprocess[ARTICLE_READING_MARKER] = reading
+    metadata[PIPELINE_MARKER] = postprocess
+    return {**row, "metadata": metadata}
+
+
+def fetch_article_reading(client: httpx.Client, url: str, *, version: str, max_chars: int) -> dict[str, Any]:
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        response = client.get(url)
+        response.raise_for_status()
+        content_type = response.headers.get("content-type", "")
+        if content_type and "html" not in content_type.lower() and "text/" not in content_type.lower():
+            return {
+                "version": version,
+                "status": "skipped",
+                "source": "http",
+                "reason": f"unsupported content type: {content_type[:80]}",
+                "processed_at": now,
+            }
+        text = extract_article_text(response.text)
+        if not text:
+            return {
+                "version": version,
+                "status": "empty",
+                "source": "http",
+                "processed_at": now,
+            }
+        excerpt = truncate(text, max_chars)
+        return {
+            "version": version,
+            "status": "read",
+            "source": "http",
+            "chars": len(text),
+            "excerpt": excerpt,
+            "processed_at": now,
+        }
+    except Exception as exc:
+        return {
+            "version": version,
+            "status": "error",
+            "source": "http",
+            "reason": f"{type(exc).__name__}: {str(exc)[:160]}",
+            "processed_at": now,
+        }
+
+
+def extract_article_text(html: str) -> str:
+    soup = BeautifulSoup(html or "", "html.parser")
+    for tag in soup(["script", "style", "noscript", "svg", "nav", "header", "footer", "form", "aside"]):
+        tag.decompose()
+    selectors = [
+        "article",
+        "main",
+        "[role='main']",
+        ".post-content",
+        ".entry-content",
+        ".article-content",
+        ".content",
+        "#content",
+    ]
+    candidates = []
+    for selector in selectors:
+        for node in soup.select(selector):
+            text = normalize_article_text(node.get_text("\n", strip=True))
+            if text:
+                candidates.append(text)
+    if not candidates and soup.body:
+        candidates.append(normalize_article_text(soup.body.get_text("\n", strip=True)))
+    return max(candidates, key=len) if candidates else ""
+
+
+def normalize_article_text(value: str) -> str:
+    lines = []
+    seen = set()
+    for raw_line in re.split(r"[\r\n]+", value or ""):
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if len(line) < 3:
+            continue
+        if line in seen:
+            continue
+        seen.add(line)
+        lines.append(line)
+    text = "\n".join(lines)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 def postprocess_model_settings(settings: dict[str, Any], model: str) -> dict[str, Any]:
@@ -344,3 +535,26 @@ def truncate(value: str, limit: int) -> str:
 def chunks(values: list[dict[str, Any]], size: int):
     for start in range(0, len(values), size):
         yield values[start : start + size]
+
+
+def chunks_by_article_weight(values: list[dict[str, Any]], default_size: int, article_size: int):
+    batch: list[dict[str, Any]] = []
+    max_size = default_size
+    for value in values:
+        item_size = article_size if has_article_excerpt(value) else default_size
+        if batch and (len(batch) >= max_size or item_size != max_size):
+            yield batch
+            batch = []
+            max_size = item_size
+        if not batch:
+            max_size = item_size
+        batch.append(value)
+    if batch:
+        yield batch
+
+
+def has_article_excerpt(row: dict[str, Any]) -> bool:
+    metadata = row.get("metadata") or {}
+    postprocess = metadata.get(PIPELINE_MARKER) or {}
+    reading = postprocess.get(ARTICLE_READING_MARKER) if isinstance(postprocess, dict) else {}
+    return isinstance(reading, dict) and bool(reading.get("excerpt"))

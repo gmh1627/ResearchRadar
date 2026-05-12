@@ -29,6 +29,8 @@ from .wiki import compile_wiki_pages
 config = load_config()
 db = Database(config.db_path)
 crawler = CrawlManager(config, db)
+translation_queue: set[str] = set()
+translation_queue_lock = asyncio.Lock()
 
 DIGEST_SECTIONS = [
     {
@@ -306,6 +308,7 @@ async def sources():
 
 @app.get("/api/items")
 async def items(
+    background: BackgroundTasks,
     user_id: str = "default",
     days: int = 14,
     item_date: str = Query("", alias="date"),
@@ -329,7 +332,7 @@ async def items(
         limit=min(limit, 300),
         offset=offset,
     )
-    await ensure_translations(rows, max_count=max(0, min(translate_limit, 100)))
+    schedule_translations(background, rows, max_count=max(0, min(translate_limit, 100)))
     profile = profile_for_user(user_id)
     rows = [with_display_summary(row, profile=profile) for row in rows]
     return {"items": rows, "total": total}
@@ -356,16 +359,18 @@ async def available_dates(
 
 
 @app.get("/api/items/{item_id}")
-async def item_detail(item_id: str, user_id: str = "default"):
+async def item_detail(item_id: str, background: BackgroundTasks, user_id: str = "default"):
     item = db.get_item(item_id)
     if not item:
         raise HTTPException(status_code=404, detail="item not found")
     db.record_item_view(user_id, item_id)
+    schedule_translations(background, [item], max_count=1)
     return with_display_summary(item, profile=profile_for_user(user_id))
 
 
 @app.get("/api/digest")
 async def digest(
+    background: BackgroundTasks,
     user_id: str = "default",
     days: int = 7,
     limit: int | None = None,
@@ -384,6 +389,7 @@ async def digest(
     existing_run = None if item_date else db.get_digest_run(user_id, run_date, days, max_items, profile_version)
     if existing_run:
         existing_rows = existing_run["items"]
+        schedule_translations(background, existing_rows, max_count=min(max_items, 30))
         existing_items = [with_display_summary(row, profile=profile) for row in existing_rows]
         sections = build_digest_sections(existing_items)
         return {
@@ -408,6 +414,7 @@ async def digest(
         min_per_section=min_per_section,
         excluded_fingerprints=sent_fingerprints,
     )
+    schedule_translations(background, selected, max_count=min(max_items, 30))
     selected = [with_display_summary(row, profile=profile) for row in selected]
     if not item_date:
         db.create_digest_run(
@@ -1417,9 +1424,12 @@ def validate_item_date(value: str) -> None:
 
 def with_display_summary(item: dict[str, Any], profile: dict[str, Any] | None = None) -> dict[str, Any]:
     summary_zh = (item.get("summary_zh") or "").strip()
+    source_summary = (item.get("summary") or "").strip()
+    summary_pending = False
     if not summary_zh:
-        if item.get("summary"):
-            summary_zh = "中文摘要生成中，请稍后刷新。"
+        if source_summary:
+            summary_zh = source_summary
+            summary_pending = True
         else:
             summary_zh = "暂无来源摘要，建议打开原文查看细节。"
     date_value = item.get("published_at") or item.get("collected_at")
@@ -1429,6 +1439,7 @@ def with_display_summary(item: dict[str, Any], profile: dict[str, Any] | None = 
         "score": item.get("quality_score"),
         "tags": visible_tags(item.get("tags", [])),
         "display_summary": summary_zh,
+        "summary_pending": summary_pending,
         "date_kind": date_kind,
         "display_timestamp": date_value,
         "evidence_links": build_evidence_links(item),
@@ -1716,3 +1727,37 @@ async def ensure_translations(rows: list[dict[str, Any]], max_count: int = 30) -
                 db.update_summary_zh(row["id"], zh)
 
     await asyncio.to_thread(translate_and_update)
+
+
+def schedule_translations(background: BackgroundTasks, rows: list[dict[str, Any]], max_count: int = 30) -> None:
+    missing = [
+        dict(row)
+        for row in rows
+        if not (row.get("summary_zh") or "").strip() and ((row.get("summary") or "").strip() or (row.get("title") or "").strip())
+    ][:max_count]
+    if not missing:
+        return
+    background.add_task(translate_rows_background, missing)
+
+
+async def translate_rows_background(rows: list[dict[str, Any]]) -> None:
+    async with translation_queue_lock:
+        queued = [row for row in rows if row.get("id") and row["id"] not in translation_queue]
+        translation_queue.update(row["id"] for row in queued)
+    if not queued:
+        return
+    try:
+        await asyncio.to_thread(translate_rows_sync, queued)
+    finally:
+        async with translation_queue_lock:
+            for row in queued:
+                translation_queue.discard(row["id"])
+
+
+def translate_rows_sync(rows: list[dict[str, Any]]) -> None:
+    translator = SummaryTranslator(config.settings)
+    for start in range(0, len(rows), 6):
+        batch = rows[start : start + 6]
+        summaries = translator.translate_rows(batch)
+        for row, zh in zip(batch, summaries):
+            db.update_summary_zh(row["id"], zh)

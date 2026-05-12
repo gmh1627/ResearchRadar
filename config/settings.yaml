@@ -62,12 +62,17 @@ llm:
 llm_postprocess:
   enabled: true
   model: "gpt-5.5"
-  pipeline_version: "gpt55-v1"
+  pipeline_version: "gpt55-v2-blogread"
   days: 3
   max_items_per_run: 80
   prefilter_batch_size: 12
   analysis_batch_size: 6
+  blog_analysis_batch_size: 2
   min_ai_confidence: 0.55
+  read_blog_pages: true
+  blog_read_max_items_per_run: 24
+  blog_read_max_chars: 6000
+  blog_read_timeout_seconds: 8
 
 jina:
   api_key_env: "JINA_API_KEY"

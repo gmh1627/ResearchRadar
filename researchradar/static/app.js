@@ -512,7 +512,7 @@ function renderItem(item, mode = "radar") {
   const scoreValue = formatScore(item.score);
   const score = scoreValue !== "" ? `<span class="mini-fact score-pill ${scoreClass(item.score)}">分 ${escapeHtml(scoreValue)}</span>` : "";
   const tags = visibleTags(item.tags).slice(0, 6).map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("");
-  const summary = item.display_summary || item.summary_zh || "中文摘要生成中，请稍后刷新。";
+  const summary = item.display_summary || item.summary_zh || item.summary || "暂无摘要，建议打开原文查看细节。";
   const facts = renderItemFacts(item);
   const signalBadges = renderSignalBadges(item, mode === "digest");
   return `
@@ -565,7 +565,7 @@ function selectItem(item) {
   $("detailType").className = `pill ${pillClass(item.source_type)}`;
   $("detailSource").textContent = `${item.source_name} · ${formatItemDate(item, "full")}`;
   $("detailTitle").textContent = item.title;
-  setMarkdownText($("detailSummary"), item.display_summary || item.summary_zh || "中文摘要生成中，请稍后刷新。");
+  setMarkdownText($("detailSummary"), item.display_summary || item.summary_zh || item.summary || "暂无摘要，建议打开原文查看细节。");
   $("detailLink").href = item.url || "#";
   $("detailTags").innerHTML = visibleTags(item.tags).map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("");
   renderDetailReasons(item);
@@ -830,7 +830,7 @@ async function loadArxiv(options = {}) {
     const q = encodeURIComponent(state.search || "");
     const offset = append ? page.items.length : 0;
     const data = await api(
-      `/api/items?user_id=${encodeURIComponent(state.profile)}&source_id=arxiv_core&date=${encodeURIComponent(state.arxivDate)}&q=${q}&limit=${PAGE_SIZE}&offset=${offset}`
+      `/api/items?user_id=${encodeURIComponent(state.profile)}&source_id=arxiv_core&date=${encodeURIComponent(state.arxivDate)}&q=${q}&limit=${PAGE_SIZE}&offset=${offset}&translate_limit=24`
     );
     page.total = data.total;
     page.items = append ? page.items.concat(data.items) : data.items;
@@ -874,7 +874,7 @@ async function loadRadar(options = {}) {
     const offset = append ? page.items.length : 0;
     const dateParam = state.radarDate === "__all__" ? "" : `date=${encodeURIComponent(state.radarDate)}&`;
     const data = await api(
-      `/api/items?${dateParam}user_id=${encodeURIComponent(state.profile)}&source_type=${encodeURIComponent(type)}&q=${q}&days=${encodeURIComponent(days)}&limit=${PAGE_SIZE}&offset=${offset}`
+      `/api/items?${dateParam}user_id=${encodeURIComponent(state.profile)}&source_type=${encodeURIComponent(type)}&q=${q}&days=${encodeURIComponent(days)}&limit=${PAGE_SIZE}&offset=${offset}&translate_limit=18`
     );
     page.total = data.total;
     page.items = append ? page.items.concat(data.items) : data.items;
@@ -913,7 +913,7 @@ async function loadBlogs(options = {}) {
     const q = encodeURIComponent(state.search || "");
     const offset = append ? page.items.length : 0;
     const data = await api(
-      `/api/items?user_id=${encodeURIComponent(state.profile)}&source_type=blog%2Ccn_community&date=${encodeURIComponent(state.blogDate)}&q=${q}&limit=${PAGE_SIZE}&offset=${offset}`
+      `/api/items?user_id=${encodeURIComponent(state.profile)}&source_type=blog%2Ccn_community&date=${encodeURIComponent(state.blogDate)}&q=${q}&limit=${PAGE_SIZE}&offset=${offset}&translate_limit=24`
     );
     page.total = data.total;
     page.items = append ? page.items.concat(data.items) : data.items;
@@ -1607,11 +1607,12 @@ async function loadKnowledgeGraph() {
 function renderKnowledgeGraph(graph) {
   const canvas = $("knowledgeGraph");
   if (!canvas) return;
-  // Fit canvas to its container at native device resolution (fixes coordinate mismatch)
   const shell = canvas.parentElement;
   const dpr = window.devicePixelRatio || 1;
   const logW = shell ? Math.max(shell.clientWidth || 0, 300) : 700;
-  const logH = Math.round(logW * 0.50);
+  const nodeCount = (graph.nodes || []).length;
+  const aspect = nodeCount > 65 ? 0.66 : nodeCount > 40 ? 0.58 : 0.52;
+  const logH = Math.round(clampNumber(logW * aspect, 420, 760));
   canvas.style.height = logH + "px";
   canvas.width = Math.round(logW * dpr);
   canvas.height = Math.round(logH * dpr);
@@ -1648,7 +1649,6 @@ function bindGraphCanvas(canvas) {
   canvas.dataset.bound = "true";
   canvas.addEventListener("mousemove", (event) => {
     const rect = canvas.getBoundingClientRect();
-    // Coordinates are in logical pixels (CSS px) which match node positions
     const x = event.clientX - rect.left;
     const y = event.clientY - rect.top;
     const next = state.graph.nodes.find((n) => Math.hypot(n.x - x, n.y - y) < graphRadius(n) + 8) || null;
@@ -1698,20 +1698,20 @@ function renderGraphTip(event, node) {
   tip.classList.remove("hidden");
 }
 
-// ── Graph: set initial cluster positions (physics handles refinement) ──
 function initGraphPositions(canvas, nodes) {
   const W = state.graph.logW || canvas.width;
   const H = state.graph.logH || canvas.height;
+  const margin = graphCanvasMargin();
   const centers = {
-    topic:        { x: W * 0.50, y: H * 0.42 },
-    source:       { x: W * 0.22, y: H * 0.52 },
+    topic:        { x: W * 0.50, y: H * 0.38 },
+    source:       { x: W * 0.18, y: H * 0.54 },
     item:         { x: W * 0.68, y: H * 0.56 },
-    paper:        { x: W * 0.68, y: H * 0.42 },
-    repo:         { x: W * 0.70, y: H * 0.68 },
-    discussion:   { x: W * 0.58, y: H * 0.72 },
-    blog:         { x: W * 0.32, y: H * 0.30 },
-    cn_community: { x: W * 0.44, y: H * 0.74 },
-    signal:       { x: W * 0.30, y: H * 0.68 },
+    paper:        { x: W * 0.73, y: H * 0.35 },
+    repo:         { x: W * 0.78, y: H * 0.72 },
+    discussion:   { x: W * 0.56, y: H * 0.80 },
+    blog:         { x: W * 0.30, y: H * 0.24 },
+    cn_community: { x: W * 0.36, y: H * 0.78 },
+    signal:       { x: W * 0.20, y: H * 0.76 },
     other:        { x: W * 0.50, y: H * 0.50 },
   };
   const groups = new Map();
@@ -1722,58 +1722,55 @@ function initGraphPositions(canvas, nodes) {
   }
   for (const [g, gNodes] of groups) {
     const c = centers[g] || centers.other;
-    const spread = Math.min(Math.min(W, H) * 0.28, 60 + Math.sqrt(gNodes.length) * 34);
+    const spread = Math.min(Math.min(W, H) * 0.36, 80 + Math.sqrt(gNodes.length) * 42);
     gNodes.sort((a, b) => (b.weight || 0) - (a.weight || 0));
     gNodes.forEach((node, i) => {
       const j = hashValue(node.id) - 0.5;
       const angle = i * 2.399963 + j * 0.8;
       const r = gNodes.length <= 1 ? 0 : spread * Math.sqrt((i + 0.35) / gNodes.length);
-      node.x = clampNumber(c.x + Math.cos(angle) * r + j * 18, 42, W - 42);
-      node.y = clampNumber(c.y + Math.sin(angle) * r + j * 12, 42, H - 42);
+      node.x = clampNumber(c.x + Math.cos(angle) * r + j * 24, margin, W - margin);
+      node.y = clampNumber(c.y + Math.sin(angle) * r + j * 18, margin, H - margin);
       node.vx = (Math.random() - 0.5) * 2.0;
       node.vy = (Math.random() - 0.5) * 2.0;
     });
   }
 }
 
-// ── Graph: one frame of physics ──
 function tickGraphPhysics(canvas, nodes, edges) {
   const W = state.graph.logW || canvas.width;
   const H = state.graph.logH || canvas.height;
+  const margin = graphCanvasMargin();
   const cx = W * 0.5, cy = H * 0.5;
-  // Repulsion
   for (let i = 0; i < nodes.length; i++) {
     for (let j = i + 1; j < nodes.length; j++) {
       const a = nodes[i], b = nodes[j];
       const dx = b.x - a.x || 0.01, dy = b.y - a.y || 0.01;
       const d2 = dx * dx + dy * dy, d = Math.sqrt(d2) || 0.1;
-      const min = graphRadius(a) + graphRadius(b) + 22;
-      const f = d < min ? (min - d) / d * 0.52 : 1100 / (d2 * d);
+      const min = graphRadius(a) + graphRadius(b) + graphNodeGap(a, b);
+      const f = d < min ? (min - d) / d * 0.72 : 2100 / (d2 * d);
       a.vx -= dx * f; a.vy -= dy * f;
       b.vx += dx * f; b.vy += dy * f;
     }
   }
-  // Spring attraction along edges
   for (const e of edges) {
     const a = e.sourceNode, b = e.targetNode;
     const dx = b.x - a.x || 0.01, dy = b.y - a.y || 0.01;
     const d = Math.sqrt(dx * dx + dy * dy) || 0.1;
-    const target = 88 + Math.max(0, 5 - Math.min(e.weight || 1, 5)) * 11;
-    const f = (d - target) / d * 0.044;
+    const target = 120 + Math.max(0, 5 - Math.min(e.weight || 1, 5)) * 18;
+    const f = (d - target) / d * 0.026;
     a.vx += dx * f; a.vy += dy * f;
     b.vx -= dx * f; b.vy -= dy * f;
   }
-  // Center gravity + damping
+  relaxGraphLabels(nodes);
   for (const n of nodes) {
-    n.vx += (cx - n.x) * 0.0055;
-    n.vy += (cy - n.y) * 0.0055;
-    n.vx *= 0.85; n.vy *= 0.85;
-    n.x = clampNumber(n.x + n.vx, 42, W - 42);
-    n.y = clampNumber(n.y + n.vy, 42, H - 42);
+    n.vx += (cx - n.x) * 0.0032;
+    n.vy += (cy - n.y) * 0.0032;
+    n.vx *= 0.84; n.vy *= 0.84;
+    n.x = clampNumber(n.x + n.vx, margin, W - margin);
+    n.y = clampNumber(n.y + n.vy, margin, H - margin);
   }
 }
 
-// ── Graph: animation loop ──
 function startGraphAnimation(canvas) {
   const ctx = canvas.getContext("2d");
   function loop() {
@@ -1781,7 +1778,7 @@ function startGraphAnimation(canvas) {
     if (!state.graph.settled) {
       tickGraphPhysics(canvas, nodes, edges);
       drawGraphEnhanced(ctx, canvas, nodes, edges);
-      if (++state.graph.tick >= 320) {
+      if (++state.graph.tick >= 380) {
         state.graph.settled = true;
         drawGraphEnhanced(ctx, canvas, nodes, edges);
         state.graph.animation = null;
@@ -1793,7 +1790,6 @@ function startGraphAnimation(canvas) {
   state.graph.animation = requestAnimationFrame(loop);
 }
 
-// ── Graph: enhanced renderer ──
 function drawGraphEnhanced(ctx, canvas, nodes, edges) {
   const dpr = state.graph.dpr || 1;
   const W = state.graph.logW || canvas.width;
@@ -1850,6 +1846,7 @@ function drawGraphEnhanced(ctx, canvas, nodes, edges) {
     if (b.id === activeId) return -1;
     return (a.weight || 0) - (b.weight || 0);
   });
+  const labelBoxes = [];
   for (const node of sorted) {
     const isActive = node.id === activeId;
     const isNb = !isActive && nbSet.has(node.id);
@@ -1892,12 +1889,10 @@ function drawGraphEnhanced(ctx, canvas, nodes, edges) {
     }
     ctx.restore();
 
-    if (!isActive && node.node_type === "item" && r < 12) continue;
+    if (!shouldDrawGraphLabel(node, isActive, isNb)) continue;
     const raw = node.label || "";
-    const maxLen = isActive ? 22 : 16;
+    const maxLen = isActive ? 24 : node.node_type === "topic" ? 18 : 15;
     const lbl = raw.length > maxLen ? raw.slice(0, maxLen - 1) + "…" : raw;
-    const labelY = node.y - r - 7;
-
     ctx.save();
     ctx.globalAlpha = dim ? 0.2 : 1;
     const fs = isActive ? 12 : 11;
@@ -1906,19 +1901,22 @@ function drawGraphEnhanced(ctx, canvas, nodes, edges) {
     ctx.textBaseline = "bottom";
     const tw = ctx.measureText(lbl).width;
     const px = 6, py = 3;
-    const rx = node.x - tw / 2 - px;
-    const ry = labelY - fs - py;
     const rw = tw + px * 2;
     const rh = fs + py * 2;
-    // Pill bg
+    const placement = placeGraphLabel(node, rw, rh, r, labelBoxes, nodes, W, H, isActive);
+    if (!placement) {
+      ctx.restore();
+      continue;
+    }
+    labelBoxes.push(placement.box);
     ctx.fillStyle = isActive ? "rgba(255,255,255,.98)" : "rgba(255,255,255,.86)";
     ctx.shadowColor = "rgba(0,0,0,.18)";
     ctx.shadowBlur = 5;
-    graphRoundRect(ctx, rx, ry, rw, rh, 5);
+    graphRoundRect(ctx, placement.x, placement.y, rw, rh, 5);
     ctx.fill();
     ctx.shadowBlur = 0;
     ctx.fillStyle = isActive ? "#0f766e" : "#292524";
-    ctx.fillText(lbl, node.x, labelY);
+    ctx.fillText(lbl, placement.textX, placement.textY);
     ctx.restore();
   }
 
@@ -1959,9 +1957,110 @@ function graphRoundRect(ctx, x, y, w, h, r) {
 }
 
 function graphRadius(node) {
-  if (node.node_type === "topic") return Math.max(15, Math.min(28, Number(node.weight || 22) / 1.55));
-  if (node.node_type === "source") return Math.max(12, Math.min(23, Number(node.weight || 18) / 1.7));
-  return Math.max(7, Math.min(17, Number(node.weight || 14) / 1.9));
+  if (node.node_type === "topic") return Math.max(14, Math.min(25, Number(node.weight || 22) / 1.75));
+  if (node.node_type === "source") return Math.max(11, Math.min(21, Number(node.weight || 18) / 1.9));
+  return Math.max(6, Math.min(15, Number(node.weight || 14) / 2.15));
+}
+
+function graphCanvasMargin() {
+  return 70;
+}
+
+function graphNodeGap(a, b) {
+  const structural = a.node_type !== "item" || b.node_type !== "item";
+  return structural ? 48 : 34;
+}
+
+function relaxGraphLabels(nodes) {
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      const a = nodes[i], b = nodes[j];
+      const la = graphLabelFootprint(a);
+      const lb = graphLabelFootprint(b);
+      const dx = lb.x - la.x || 0.01;
+      const dy = lb.y - la.y || 0.01;
+      const overlapX = (la.w + lb.w) / 2 + 10 - Math.abs(dx);
+      const overlapY = (la.h + lb.h) / 2 + 8 - Math.abs(dy);
+      if (overlapX <= 0 || overlapY <= 0) continue;
+      const push = Math.min(overlapX, overlapY) * 0.012;
+      const sx = Math.sign(dx) || 1;
+      const sy = Math.sign(dy) || 1;
+      a.vx -= sx * push; b.vx += sx * push;
+      a.vy -= sy * push * 0.45; b.vy += sy * push * 0.45;
+    }
+  }
+}
+
+function graphLabelFootprint(node) {
+  const text = String(node.label || "");
+  const w = Math.min(190, Math.max(54, text.length * 7.2));
+  const h = 19;
+  const r = graphRadius(node);
+  return { x: node.x, y: node.y - r - 18, w, h };
+}
+
+function shouldDrawGraphLabel(node, isActive, isNeighbor) {
+  if (isActive || isNeighbor) return true;
+  if (node.node_type === "topic" || node.node_type === "source") return true;
+  return graphRadius(node) >= 10.5;
+}
+
+function placeGraphLabel(node, w, h, r, labelBoxes, nodes, W, H, isActive) {
+  const gap = isActive ? 12 : 8;
+  const candidates = [
+    { x: node.x - w / 2, y: node.y - r - gap - h, textX: node.x, textY: node.y - r - gap - 3 },
+    { x: node.x - w / 2, y: node.y + r + gap, textX: node.x, textY: node.y + r + gap + h - 3 },
+    { x: node.x + r + gap, y: node.y - h / 2, textX: node.x + r + gap + w / 2, textY: node.y + h / 2 - 3 },
+    { x: node.x - r - gap - w, y: node.y - h / 2, textX: node.x - r - gap - w / 2, textY: node.y + h / 2 - 3 },
+  ];
+  let best = null;
+  for (const candidate of candidates) {
+    const box = {
+      x: clampNumber(candidate.x, 8, W - w - 8),
+      y: clampNumber(candidate.y, 8, H - h - 8),
+      w,
+      h,
+    };
+    const placement = {
+      x: box.x,
+      y: box.y,
+      textX: box.x + w / 2,
+      textY: candidate.textY + (box.y - candidate.y),
+      box,
+    };
+    const score = graphLabelPlacementScore(box, node, labelBoxes, nodes);
+    if (!best || score < best.score) best = { ...placement, score };
+    if (score === 0) return placement;
+  }
+  if (!best || (!isActive && best.score > 1000)) return null;
+  return best;
+}
+
+function graphLabelPlacementScore(box, node, labelBoxes, nodes) {
+  let score = 0;
+  for (const other of labelBoxes) {
+    const area = rectOverlapArea(box, other);
+    score += area * 3.2;
+  }
+  for (const other of nodes) {
+    if (other.id === node.id) continue;
+    const dist = distancePointToRect(other.x, other.y, box);
+    const min = graphRadius(other) + 3;
+    if (dist < min) score += (min - dist) * 22;
+  }
+  return score;
+}
+
+function rectOverlapArea(a, b) {
+  const x = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
+  const y = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+  return x * y;
+}
+
+function distancePointToRect(x, y, rect) {
+  const dx = Math.max(rect.x - x, 0, x - (rect.x + rect.w));
+  const dy = Math.max(rect.y - y, 0, y - (rect.y + rect.h));
+  return Math.hypot(dx, dy);
 }
 
 function graphGroup(node) {

@@ -1113,8 +1113,17 @@ class Database:
                     json_extract(metadata_json, '$.llm_postprocess.version') IS NULL
                     OR json_extract(metadata_json, '$.llm_postprocess.version') <> ?
                     OR json_extract(metadata_json, '$.llm_postprocess.status') = 'error'
+                    OR json_extract(metadata_json, '$.llm_postprocess.status') = 'article_read_pending_analysis'
+                    OR (
+                      COALESCE(summary_zh, '') = ''
+                      AND COALESCE(summary, '') <> ''
+                    )
                   )
-                ORDER BY (published_at IS NULL) ASC, COALESCE(published_at, collected_at) DESC
+                ORDER BY
+                  CASE WHEN source_type IN ('blog', 'cn_community') THEN 0 ELSE 1 END,
+                  CASE WHEN COALESCE(summary_zh, '') = '' AND COALESCE(summary, '') <> '' THEN 0 ELSE 1 END,
+                  (published_at IS NULL) ASC,
+                  COALESCE(published_at, collected_at) DESC
                 LIMIT ?
                 """,
                 (since.isoformat(), pipeline_version, max(1, limit)),
