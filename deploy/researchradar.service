@@ -10,8 +10,12 @@ Group=batchcom
 WorkingDirectory=/home/dataset-local/ResearchRadar
 Environment=PIP_CACHE_DIR=/home/dataset-local/.cache/pip
 Environment=HOME=/home/batchcom
+Environment=RESEARCHRADAR_HOST=0.0.0.0
+Environment=RESEARCHRADAR_PORT=8766
+Environment=NO_PROXY=localhost,127.0.0.1,::1,0.0.0.0,127.0.0.0/8
+Environment=no_proxy=localhost,127.0.0.1,::1,0.0.0.0,127.0.0.0/8
 EnvironmentFile=-/home/dataset-local/ResearchRadar/.env
-ExecStart=/home/dataset-local/ResearchRadar/.venv/bin/python -m uvicorn researchradar.app:app --host 0.0.0.0 --port 8765
+ExecStart=/usr/bin/env RESEARCHRADAR_HOST=0.0.0.0 RESEARCHRADAR_PORT=8766 NO_PROXY=localhost,127.0.0.1,::1,0.0.0.0,127.0.0.0/8 no_proxy=localhost,127.0.0.1,::1,0.0.0.0,127.0.0.0/8 /home/dataset-local/ResearchRadar/scripts/start.sh
 Restart=always
 RestartSec=10
 

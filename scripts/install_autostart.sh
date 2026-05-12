@@ -2,7 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LINE="@reboot cd $ROOT && $ROOT/scripts/start_background.sh"
+PORT="${RESEARCHRADAR_PORT:-8766}"
+LINE="@reboot cd $ROOT && RESEARCHRADAR_PORT=$PORT $ROOT/scripts/start_background.sh"
 TMP="$(mktemp)"
 
 crontab -l 2>/dev/null | grep -v "ResearchRadar/scripts/start_background.sh" > "$TMP" || true

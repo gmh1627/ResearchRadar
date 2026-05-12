@@ -114,16 +114,30 @@ The GitHub repository is the right way to share the app code, configs, and docs.
 
 ## Notes
 
-ResearchRadar is intended as a local personal dashboard. If you expose `0.0.0.0:8765` or a custom port such as `8766` beyond localhost, put it behind SSH tunneling, a firewall, or a reverse proxy with authentication because crawl and chat endpoints can trigger external API calls.
+ResearchRadar is intended as a local personal dashboard. If you expose `0.0.0.0:8766` beyond localhost, put it behind SSH tunneling, a firewall, or a reverse proxy with authentication because crawl and chat endpoints can trigger external API calls.
 
 The dashboard uses MathJax from jsDelivr to typeset formulas in dynamic content. If the machine is offline, the same text remains readable, but formulas will stay in their original LaTeX form.
 
 ## Autostart
 
-Simple user-level autostart:
+System service on a host booted with systemd:
 
 ```bash
-scripts/install_autostart.sh
+scripts/install_systemd.sh
 ```
 
-Systemd template is available at `deploy/researchradar.service` if you prefer a system service.
+The service uses `0.0.0.0:8766` and is also available as `deploy/researchradar.service`.
+
+User-level systemd service:
+
+```bash
+RESEARCHRADAR_PORT=8766 scripts/install_user_systemd.sh
+```
+
+Crontab fallback:
+
+```bash
+RESEARCHRADAR_PORT=8766 scripts/install_autostart.sh
+```
+
+Some managed notebook/container environments do not run systemd as PID 1 and may block crontab or supervisor writes. In that case the scripts can install the unit file/template, but the platform must provide its own boot hook or port-forwarding restart.

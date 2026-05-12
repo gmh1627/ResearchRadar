@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 USER_SYSTEMD_DIR="$HOME/.config/systemd/user"
 mkdir -p "$USER_SYSTEMD_DIR"
+PORT="${RESEARCHRADAR_PORT:-8766}"
 
 cat > "$USER_SYSTEMD_DIR/researchradar.service" <<SERVICE
 [Unit]
@@ -15,8 +16,12 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=$ROOT
 Environment=PIP_CACHE_DIR=/home/dataset-local/.cache/pip
+Environment=RESEARCHRADAR_HOST=0.0.0.0
+Environment=RESEARCHRADAR_PORT=$PORT
+Environment=NO_PROXY=localhost,127.0.0.1,::1,0.0.0.0,127.0.0.0/8
+Environment=no_proxy=localhost,127.0.0.1,::1,0.0.0.0,127.0.0.0/8
 EnvironmentFile=-$ROOT/.env
-ExecStart=$ROOT/.venv/bin/python -m uvicorn researchradar.app:app --host 0.0.0.0 --port 8765
+ExecStart=/usr/bin/env RESEARCHRADAR_HOST=0.0.0.0 RESEARCHRADAR_PORT=$PORT NO_PROXY=localhost,127.0.0.1,::1,0.0.0.0,127.0.0.0/8 no_proxy=localhost,127.0.0.1,::1,0.0.0.0,127.0.0.0/8 $ROOT/scripts/start.sh
 Restart=always
 RestartSec=10
 
