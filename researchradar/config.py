@@ -12,6 +12,23 @@ ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = ROOT / "config"
 DATA_DIR = ROOT / "data"
 LOG_DIR = ROOT / "logs"
+LOCAL_NO_PROXY_HOSTS = ("localhost", "127.0.0.1", "::1", "0.0.0.0", "127.0.0.0/8")
+
+
+def ensure_local_proxy_bypass() -> None:
+    """Keep local ResearchRadar traffic out of HTTP_PROXY/HTTPS_PROXY."""
+    for key in ("NO_PROXY", "no_proxy"):
+        values = split_no_proxy(os.environ.get(key, ""))
+        seen = {value.lower() for value in values}
+        for host in LOCAL_NO_PROXY_HOSTS:
+            if host.lower() not in seen:
+                values.append(host)
+                seen.add(host.lower())
+        os.environ[key] = ",".join(values)
+
+
+def split_no_proxy(value: str) -> list[str]:
+    return [part.strip() for part in str(value or "").split(",") if part.strip()]
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
@@ -124,6 +141,7 @@ class AppConfig:
 
 def load_config() -> AppConfig:
     load_env_file()
+    ensure_local_proxy_bypass()
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     settings = load_yaml(CONFIG_DIR / "settings.yaml")

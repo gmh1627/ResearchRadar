@@ -57,6 +57,9 @@ Supported keys:
 - `OPENAI_MODEL`
 - `JINA_API_KEY`
 - `SERPER_API_KEY`
+- `NO_PROXY` / `no_proxy`: recommended when the server has `HTTP_PROXY`/`HTTPS_PROXY` set. Include `localhost,127.0.0.1,::1,0.0.0.0,127.0.0.0/8` so local dashboard/API calls do not get routed through a proxy.
+
+`scripts/start.sh` and the Python app also add these local bypass hosts automatically at startup.
 
 The default model path uses the OpenAI Responses API. For the Haoxiang gateway, set `OPENAI_BASE_URL=https://ie-crs.haoxiang.ai`; ResearchRadar will fall back to streamed Chat Completions if the Responses endpoint is unavailable or returns empty content.
 
