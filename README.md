@@ -37,6 +37,15 @@ http://127.0.0.1:8765
 
 The startup command prints the exact local URL. The default port is `8765`; set `RESEARCHRADAR_PORT=8766` before starting if you want `http://127.0.0.1:8766`.
 
+Run an extra Web instance on another port:
+
+```bash
+cd /home/dataset-local/ResearchRadar
+RESEARCHRADAR_PORT=8766 .venv/bin/python -m uvicorn researchradar.app:app --host 0.0.0.0 --port 8766
+```
+
+Only one instance should run the scheduler. ResearchRadar uses `data/scheduler.lock` so extra Web instances can serve the UI/API without also running catch-up or daily crawl.
+
 ## API Keys
 
 Put local keys in `.env`. This file is ignored by git.
@@ -91,6 +100,14 @@ Manual GPT-5.5 post-process:
 - `config/settings.yaml`: crawl, scheduler, ranking, LLM, and server settings.
 - `data/researchradar.sqlite3`: local database, ignored by git. This is the only database file used by the app.
 - `logs/server.log`: background server log, ignored by git.
+
+## Sharing With Others
+
+Use the in-app “画像管理” page to create a profile for each person or research direction. Each profile gets independent feedback, saved items, notes, conversations, profile memory, and personalized digests through its `user_id`.
+
+The collected item database is shared locally. Adding a new profile does not re-crawl the web; it re-ranks the existing shared item pool for that profile. Future scheduled crawls add new shared items for everyone.
+
+The GitHub repository is the right way to share the app code, configs, and docs. It does not include local runtime data such as `data/researchradar.sqlite3`, `.env`, logs, or API keys. A new user who clones the repo will start with an empty local database and will crawl their own copy unless you separately export/share a database snapshot.
 
 ## Notes
 

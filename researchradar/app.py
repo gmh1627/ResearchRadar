@@ -14,9 +14,9 @@ from zoneinfo import ZoneInfo
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from .config import ROOT, load_config
+from .config import ROOT, load_config, profiles_path, write_yaml
 from .crawler import CrawlManager
 from .db import Database, encode_json
 from .llm import answer_question, fallback_answer, llm_runtime_status, serper_search
@@ -190,6 +190,22 @@ class ProfileCandidateGenerateRequest(BaseModel):
     limit: int = 12
 
 
+class ProfileWriteRequest(BaseModel):
+    user_id: str
+    display_name: str = ""
+    role: str = ""
+    major: str = ""
+    primary_topics: list[str] = Field(default_factory=list)
+    secondary_topics: list[str] = Field(default_factory=list)
+    negative_topics: list[str] = Field(default_factory=list)
+    preferred_sources: list[str] = Field(default_factory=list)
+    digest_language: str = "zh-CN"
+    technical_depth: str = "high"
+    include_code_links: bool = True
+    include_action_suggestions: bool = True
+    clone_from: str = ""
+
+
 @app.get("/")
 async def index():
     return FileResponse(ROOT / "researchradar" / "static" / "index.html")
@@ -208,6 +224,54 @@ async def llm_status():
 @app.get("/api/profiles")
 async def profiles():
     return {"profiles": config.profiles}
+
+
+@app.post("/api/profiles")
+async def save_profile(req: ProfileWriteRequest):
+    profile = normalize_profile_request(req)
+    profiles = [dict(row) for row in config.profiles]
+    if any(row.get("user_id") == profile["user_id"] for row in profiles):
+        raise HTTPException(status_code=409, detail="profile already exists")
+    if req.clone_from:
+        base = find_profile(req.clone_from)
+        if base:
+            merged = {**base, **profile}
+            for key in ["primary_topics", "secondary_topics", "negative_topics", "preferred_sources"]:
+                if not profile.get(key):
+                    merged[key] = base.get(key, [])
+            profile = merged
+            profile["user_id"] = normalize_user_id(req.user_id)
+            profile["display_name"] = req.display_name.strip() or profile["display_name"]
+    profiles.append(profile)
+    persist_profiles(profiles)
+    return {"ok": True, "profile": profile, "profiles": config.profiles}
+
+
+@app.put("/api/profiles/{user_id}")
+async def update_profile(user_id: str, req: ProfileWriteRequest):
+    target = normalize_user_id(user_id)
+    if target != normalize_user_id(req.user_id):
+        raise HTTPException(status_code=400, detail="user_id in path and body must match")
+    profiles = [dict(row) for row in config.profiles]
+    for index, row in enumerate(profiles):
+        if row.get("user_id") == target:
+            profiles[index] = normalize_profile_request(req)
+            persist_profiles(profiles)
+            return {"ok": True, "profile": profiles[index], "profiles": config.profiles}
+    raise HTTPException(status_code=404, detail="profile not found")
+
+
+@app.delete("/api/profiles/{user_id}")
+async def delete_profile(user_id: str):
+    target = normalize_user_id(user_id)
+    if target == "default":
+        raise HTTPException(status_code=400, detail="default profile cannot be deleted")
+    profiles = [dict(row) for row in config.profiles]
+    next_profiles = [row for row in profiles if row.get("user_id") != target]
+    if len(next_profiles) == len(profiles):
+        raise HTTPException(status_code=404, detail="profile not found")
+    persist_profiles(next_profiles)
+    return {"ok": True, "profiles": config.profiles}
 
 
 @app.get("/api/stats")
@@ -607,6 +671,53 @@ def find_profile(user_id: str) -> dict[str, Any] | None:
         if profile.get("user_id") == user_id:
             return profile
     return config.profiles[0] if config.profiles and user_id == "default" else None
+
+
+def persist_profiles(profiles: list[dict[str, Any]]) -> None:
+    config.profiles[:] = profiles
+    write_yaml(profiles_path(), {"profiles": profiles})
+
+
+def normalize_profile_request(req: ProfileWriteRequest) -> dict[str, Any]:
+    user_id = normalize_user_id(req.user_id)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    return {
+        "user_id": user_id,
+        "display_name": req.display_name.strip() or user_id,
+        "role": req.role.strip() or "Researcher",
+        "major": req.major.strip() or "Artificial Intelligence",
+        "primary_topics": clean_profile_list(req.primary_topics),
+        "secondary_topics": clean_profile_list(req.secondary_topics),
+        "negative_topics": clean_profile_list(req.negative_topics),
+        "preferred_sources": clean_profile_list(req.preferred_sources),
+        "digest_language": req.digest_language.strip() or "zh-CN",
+        "technical_depth": req.technical_depth.strip() or "high",
+        "include_code_links": bool(req.include_code_links),
+        "include_action_suggestions": bool(req.include_action_suggestions),
+    }
+
+
+def normalize_user_id(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    text = re.sub(r"[^a-z0-9_-]+", "-", text)
+    text = re.sub(r"-+", "-", text).strip("-_")
+    return text[:48]
+
+
+def clean_profile_list(values: list[Any]) -> list[str]:
+    out = []
+    seen = set()
+    for value in values or []:
+        text = " ".join(str(value or "").strip().split())
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(text)
+    return out[:40]
 
 
 def chat_context(

@@ -70,6 +70,10 @@
             <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 2h7l3 3v9a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1zm7 0v3h3M5 8.5h6M5 11.5h4"/></svg>
             知识库
           </button>
+          <button class="nav-item" data-view="profiles">
+            <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="5.5" cy="5" r="2.5"/><path d="M1.8 13c.7-2.4 2-3.6 3.7-3.6S8.5 10.6 9.2 13M10.5 4.5h3M12 3v3M11 9h3M11 12h3"/></svg>
+            画像管理
+          </button>
         </nav>
 
         <div class="ops">
@@ -282,6 +286,87 @@
             <span class="muted">手动记录和保存的回答</span>
           </div>
           <div id="notesList" class="notes"></div>
+        </section>
+
+        <section id="view-profiles" class="view">
+          <div class="section-head">
+            <div>
+              <h2>画像管理</h2>
+              <p>为不同研究方向创建独立日报、反馈和知识沉淀</p>
+            </div>
+            <button id="newProfileBtn">新建画像</button>
+          </div>
+          <div class="profile-manager">
+            <div id="profileCards" class="profile-cards"></div>
+            <form id="profileForm" class="profile-editor">
+              <div class="profile-editor-head">
+                <div>
+                  <h3 id="profileFormTitle">新建画像</h3>
+                  <p class="muted">列表字段每行一个关键词或来源 ID</p>
+                </div>
+                <button type="button" id="cloneProfileBtn">复制当前画像</button>
+              </div>
+              <div class="profile-form-grid">
+                <label>
+                  <span>用户 ID</span>
+                  <input id="profileUserId" placeholder="cv_student" required />
+                </label>
+                <label>
+                  <span>显示名</span>
+                  <input id="profileDisplayName" placeholder="CV Student" />
+                </label>
+                <label>
+                  <span>角色</span>
+                  <input id="profileRole" placeholder="PhD student" />
+                </label>
+                <label>
+                  <span>专业 / 领域</span>
+                  <input id="profileMajor" placeholder="Computer Vision" />
+                </label>
+                <label>
+                  <span>语言</span>
+                  <select id="profileLanguage">
+                    <option value="zh-CN">中文</option>
+                    <option value="en-US">English</option>
+                  </select>
+                </label>
+                <label>
+                  <span>技术深度</span>
+                  <select id="profileDepth">
+                    <option value="high">高</option>
+                    <option value="medium">中</option>
+                    <option value="brief">简洁</option>
+                  </select>
+                </label>
+              </div>
+              <div class="profile-list-fields">
+                <label>
+                  <span>主兴趣</span>
+                  <textarea id="profilePrimary" rows="6" placeholder="diffusion models&#10;video generation&#10;3D generation"></textarea>
+                </label>
+                <label>
+                  <span>次兴趣</span>
+                  <textarea id="profileSecondary" rows="6" placeholder="multimodal models&#10;vision-language models"></textarea>
+                </label>
+                <label>
+                  <span>排除 / 降权</span>
+                  <textarea id="profileNegative" rows="5" placeholder="pure LLM agents&#10;marketing automation"></textarea>
+                </label>
+                <label>
+                  <span>偏好来源</span>
+                  <textarea id="profileSources" rows="5" placeholder="arxiv_core&#10;github&#10;huggingface_blog"></textarea>
+                </label>
+              </div>
+              <div class="profile-toggle-row">
+                <label class="checkbox"><input id="profileCodeLinks" type="checkbox" checked /><span>日报优先包含代码链接</span></label>
+                <label class="checkbox"><input id="profileActions" type="checkbox" checked /><span>包含建议动作</span></label>
+              </div>
+              <div class="profile-form-actions">
+                <button type="submit" class="primary">保存画像</button>
+                <button type="button" id="deleteProfileBtn" class="ghost">删除画像</button>
+              </div>
+            </form>
+          </div>
         </section>
       </main>
 

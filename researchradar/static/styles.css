@@ -533,6 +533,58 @@ textarea { resize: vertical; }
 .profile-candidate p { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.45; }
 .candidate-actions { display: flex; gap: 6px; }
 
+/* ── Profile manager ─────────────────────────── */
+.profile-manager {
+  display: grid; grid-template-columns: minmax(230px,.75fr) minmax(0,1.45fr);
+  gap: 14px; align-items: start;
+}
+.profile-cards {
+  display: grid; gap: 9px;
+}
+.profile-card {
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r);
+  padding: 13px 14px; cursor: pointer; box-shadow: var(--sh-xs);
+  transition: border-color var(--t), box-shadow var(--t), background var(--t);
+}
+.profile-card:hover, .profile-card.active {
+  border-color: var(--accent); box-shadow: var(--sh-sm); background: #fff;
+}
+.profile-card.active {
+  background: var(--accent-light);
+}
+.profile-card h3 { font-size: 14px; line-height: 1.35; margin-bottom: 3px; color: var(--ink); }
+.profile-card p { color: var(--muted); font-size: 12px; margin-bottom: 8px; overflow-wrap: anywhere; }
+.profile-editor {
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg);
+  padding: 16px; box-shadow: var(--sh-xs);
+}
+.profile-editor-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px;
+}
+.profile-editor-head h3 { font-size: 16px; line-height: 1.3; color: var(--ink); }
+.profile-editor-head button { flex: 0 0 auto; }
+.profile-form-grid {
+  display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px;
+}
+.profile-form-grid label, .profile-list-fields label {
+  display: block; min-width: 0;
+}
+.profile-form-grid span, .profile-list-fields span {
+  display: block; color: var(--muted); font-size: 11px; font-weight: 700; margin-bottom: 4px;
+}
+.profile-list-fields {
+  display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; margin-top: 12px;
+}
+.profile-list-fields textarea {
+  min-height: 128px; line-height: 1.5;
+}
+.profile-toggle-row {
+  display: flex; flex-wrap: wrap; gap: 14px; margin-top: 12px;
+}
+.profile-form-actions {
+  display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px;
+}
+
 /* ── Resizable panes ─────────────────────────── */
 .pane-resizer {
   position: absolute; top: 0; bottom: 0; width: 9px; z-index: 60;
@@ -756,7 +808,7 @@ textarea { resize: vertical; }
   .date-controls .muted { text-align: left; }
   .source-row { grid-template-columns: 1fr; }
   .evidence-grid { grid-template-columns: 1fr; }
-  .knowledge-stats, .knowledge-columns, .profile-grid, .profile-fields, .note-row, .wiki-layout { grid-template-columns: 1fr; }
+  .knowledge-stats, .knowledge-columns, .profile-grid, .profile-fields, .note-row, .wiki-layout, .profile-manager, .profile-form-grid, .profile-list-fields { grid-template-columns: 1fr; }
   .knowledge-search, .profile-candidate, .page-chat-actions { grid-template-columns: 1fr; flex-direction: column; align-items: stretch; }
   .candidate-actions { justify-content: flex-start; }
   .profile-head { display: block; }

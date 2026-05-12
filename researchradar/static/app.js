@@ -30,6 +30,8 @@ const state = {
     pages: [],
     activeSlug: "",
   },
+  profiles: [],
+  profileEditorMode: "new",
   knowledge: {
     items: [],
     notes: [],
@@ -639,9 +641,13 @@ async function loadHealth() {
 
 async function loadProfiles() {
   const data = await api("/api/profiles");
+  state.profiles = data.profiles || [];
   $("profileSelect").innerHTML = data.profiles
     .map((profile) => `<option value="${escapeHtml(profile.user_id)}">${escapeHtml(profile.display_name || profile.user_id)}</option>`)
     .join("");
+  if (!state.profiles.some((profile) => profile.user_id === state.profile) && state.profiles.length) {
+    state.profile = state.profiles[0].user_id;
+  }
   $("profileSelect").value = state.profile;
 }
 
@@ -971,6 +977,167 @@ function renderKnowledgeProfile(profile, stats) {
       </section>
     </div>
   `;
+}
+
+function renderProfileManager() {
+  renderProfileCards();
+  if (state.profileEditorMode === "new") {
+    fillProfileForm(blankProfileFromCurrent());
+  } else {
+    const profile = currentProfile() || state.profiles[0] || blankProfileFromCurrent();
+    fillProfileForm(profile, "edit");
+  }
+}
+
+function renderProfileCards() {
+  const container = $("profileCards");
+  if (!container) return;
+  container.innerHTML =
+    (state.profiles || [])
+      .map((profile) => {
+        const active = profile.user_id === state.profile ? " active" : "";
+        const topics = (profile.primary_topics || []).slice(0, 5).map((topic) => `<span class="tag">${escapeHtml(topic)}</span>`).join("");
+        return `
+          <article class="profile-card${active}" data-id="${escapeHtml(profile.user_id)}">
+            <div>
+              <h3>${escapeHtml(profile.display_name || profile.user_id)}</h3>
+              <p>${escapeHtml(profile.user_id)} · ${escapeHtml(profile.major || "未设置领域")}</p>
+            </div>
+            <div class="tags">${topics || '<span class="muted">暂无主兴趣</span>'}</div>
+          </article>
+        `;
+      })
+      .join("") || `<div class="empty-state compact-empty">还没有画像。</div>`;
+  container.querySelectorAll(".profile-card").forEach((card) => {
+    card.addEventListener("click", () => {
+      state.profile = card.dataset.id;
+      state.profileEditorMode = "edit";
+      $("profileSelect").value = state.profile;
+      fillProfileForm(currentProfile(), "edit");
+      renderProfileCards();
+    });
+  });
+}
+
+function currentProfile() {
+  return (state.profiles || []).find((profile) => profile.user_id === state.profile) || null;
+}
+
+function blankProfileFromCurrent() {
+  const base = currentProfile() || state.profiles[0] || {};
+  return {
+    user_id: "",
+    display_name: "",
+    role: base.role || "Researcher",
+    major: "",
+    primary_topics: [],
+    secondary_topics: [],
+    negative_topics: base.negative_topics || [],
+    preferred_sources: base.preferred_sources || [],
+    digest_language: base.digest_language || "zh-CN",
+    technical_depth: base.technical_depth || "high",
+    include_code_links: base.include_code_links !== false,
+    include_action_suggestions: base.include_action_suggestions !== false,
+  };
+}
+
+function fillProfileForm(profile, mode = state.profileEditorMode) {
+  if (!profile || !$("profileForm")) return;
+  state.profileEditorMode = mode;
+  $("profileFormTitle").textContent = mode === "new" ? "新建画像" : "编辑画像";
+  $("profileUserId").value = profile.user_id || "";
+  $("profileUserId").disabled = mode !== "new";
+  $("profileDisplayName").value = profile.display_name || "";
+  $("profileRole").value = profile.role || "";
+  $("profileMajor").value = profile.major || "";
+  $("profileLanguage").value = profile.digest_language || "zh-CN";
+  $("profileDepth").value = profile.technical_depth || "high";
+  $("profilePrimary").value = listToLines(profile.primary_topics);
+  $("profileSecondary").value = listToLines(profile.secondary_topics);
+  $("profileNegative").value = listToLines(profile.negative_topics);
+  $("profileSources").value = listToLines(profile.preferred_sources);
+  $("profileCodeLinks").checked = profile.include_code_links !== false;
+  $("profileActions").checked = profile.include_action_suggestions !== false;
+  $("deleteProfileBtn").disabled = mode === "new" || profile.user_id === "default";
+}
+
+function profilePayloadFromForm() {
+  return {
+    user_id: $("profileUserId").value.trim(),
+    display_name: $("profileDisplayName").value.trim(),
+    role: $("profileRole").value.trim(),
+    major: $("profileMajor").value.trim(),
+    primary_topics: linesToList($("profilePrimary").value),
+    secondary_topics: linesToList($("profileSecondary").value),
+    negative_topics: linesToList($("profileNegative").value),
+    preferred_sources: linesToList($("profileSources").value),
+    digest_language: $("profileLanguage").value,
+    technical_depth: $("profileDepth").value,
+    include_code_links: $("profileCodeLinks").checked,
+    include_action_suggestions: $("profileActions").checked,
+  };
+}
+
+function listToLines(values) {
+  return (values || []).join("\n");
+}
+
+function linesToList(value) {
+  return String(value || "")
+    .split(/\n|,/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+async function saveProfileForm(event) {
+  event.preventDefault();
+  const payload = profilePayloadFromForm();
+  if (!payload.user_id) {
+    showToast("请填写用户 ID");
+    return;
+  }
+  const mode = state.profileEditorMode;
+  const path = mode === "new" ? "/api/profiles" : `/api/profiles/${encodeURIComponent(payload.user_id)}`;
+  const method = mode === "new" ? "POST" : "PUT";
+  const data = await api(path, { method, body: JSON.stringify(payload) });
+  state.profiles = data.profiles || [];
+  state.profile = data.profile.user_id;
+  await loadProfiles();
+  $("profileSelect").value = state.profile;
+  state.profileEditorMode = "edit";
+  renderProfileManager();
+  showToast("画像已保存");
+  await refreshView();
+}
+
+async function deleteCurrentProfile() {
+  const profile = currentProfile();
+  if (!profile || profile.user_id === "default") return;
+  const data = await api(`/api/profiles/${encodeURIComponent(profile.user_id)}`, { method: "DELETE" });
+  state.profiles = data.profiles || [];
+  state.profile = state.profiles[0]?.user_id || "default";
+  await loadProfiles();
+  state.profileEditorMode = "edit";
+  renderProfileManager();
+  showToast("画像已删除");
+  await refreshView();
+}
+
+function startNewProfile() {
+  state.profileEditorMode = "new";
+  fillProfileForm(blankProfileFromCurrent(), "new");
+  renderProfileCards();
+}
+
+function cloneCurrentProfile() {
+  const base = currentProfile() || state.profiles[0] || blankProfileFromCurrent();
+  const clone = {
+    ...base,
+    user_id: "",
+    display_name: `${base.display_name || base.user_id || "Profile"} Copy`,
+  };
+  state.profileEditorMode = "new";
+  fillProfileForm(clone, "new");
 }
 
 function renderProfileLearning(candidates, memory) {
@@ -1802,6 +1969,7 @@ async function refreshView() {
   if (state.view === "blogs") await loadBlogs();
   if (state.view === "sources") await loadSources();
   if (state.view === "notes") await loadNotes();
+  if (state.view === "profiles") renderProfileManager();
 }
 
 function setView(view) {
@@ -2022,6 +2190,7 @@ function bindEvents() {
   document.querySelectorAll(".nav-item").forEach((button) => button.addEventListener("click", () => setView(button.dataset.view)));
   $("profileSelect").addEventListener("change", () => {
     state.profile = $("profileSelect").value;
+    if (state.view === "profiles") state.profileEditorMode = "edit";
     refreshView().catch(showError);
   });
   $("digestDays").addEventListener("change", () => {
@@ -2088,6 +2257,10 @@ function bindEvents() {
   $("knowledgeSearchInput").addEventListener("keydown", (event) => {
     if (event.key === "Enter") searchKnowledge().catch(showError);
   });
+  $("profileForm").addEventListener("submit", (event) => saveProfileForm(event).catch(showError));
+  $("newProfileBtn").addEventListener("click", () => startNewProfile());
+  $("cloneProfileBtn").addEventListener("click", () => cloneCurrentProfile());
+  $("deleteProfileBtn").addEventListener("click", () => deleteCurrentProfile().catch(showError));
   bindPaneResizers();
 }
 

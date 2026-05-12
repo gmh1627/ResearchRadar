@@ -19,6 +19,16 @@ def load_yaml(path: Path) -> dict[str, Any]:
         return yaml.safe_load(fh) or {}
 
 
+def write_yaml(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as fh:
+        yaml.safe_dump(data, fh, allow_unicode=True, sort_keys=False)
+
+
+def profiles_path() -> Path:
+    return CONFIG_DIR / "profiles.yaml"
+
+
 def load_env_file(path: Path = ROOT / ".env") -> None:
     if not path.exists():
         return
