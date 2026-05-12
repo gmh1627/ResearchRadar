@@ -306,6 +306,7 @@ async def sources():
 
 @app.get("/api/items")
 async def items(
+    user_id: str = "default",
     days: int = 14,
     item_date: str = Query("", alias="date"),
     q: str = "",
@@ -329,7 +330,8 @@ async def items(
         offset=offset,
     )
     await ensure_translations(rows, max_count=max(0, min(translate_limit, 100)))
-    rows = [with_display_summary(row) for row in rows]
+    profile = profile_for_user(user_id)
+    rows = [with_display_summary(row, profile=profile) for row in rows]
     return {"items": rows, "total": total}
 
 
@@ -359,7 +361,7 @@ async def item_detail(item_id: str, user_id: str = "default"):
     if not item:
         raise HTTPException(status_code=404, detail="item not found")
     db.record_item_view(user_id, item_id)
-    return with_display_summary(item)
+    return with_display_summary(item, profile=profile_for_user(user_id))
 
 
 @app.get("/api/digest")
@@ -382,7 +384,7 @@ async def digest(
     existing_run = None if item_date else db.get_digest_run(user_id, run_date, days, max_items, profile_version)
     if existing_run:
         existing_rows = existing_run["items"]
-        existing_items = [with_display_summary(row) for row in existing_rows]
+        existing_items = [with_display_summary(row, profile=profile) for row in existing_rows]
         sections = build_digest_sections(existing_items)
         return {
             "profile": profile,
@@ -406,7 +408,7 @@ async def digest(
         min_per_section=min_per_section,
         excluded_fingerprints=sent_fingerprints,
     )
-    selected = [with_display_summary(row) for row in selected]
+    selected = [with_display_summary(row, profile=profile) for row in selected]
     if not item_date:
         db.create_digest_run(
             user_id=user_id,
@@ -475,10 +477,11 @@ async def knowledge(user_id: str = "default"):
     memory = db.list_profile_memory(user_id)
     effective = effective_profile(profile, memory)
     stats = filter_knowledge_stats(db.knowledge_stats(user_id), effective)
-    saved_items = [with_display_summary(row) for row in db.list_feedback_items(user_id, ["save", "deep_read"], limit=80)]
+    saved_items = [with_display_summary(row, profile=effective) for row in db.list_feedback_items(user_id, ["save", "deep_read"], limit=80)]
     return {
         "profile": effective,
         "stats": stats,
+        "taste_model": build_taste_model(user_id, effective, memory, stats),
         "items": saved_items,
         "notes": db.list_notes(user_id),
         "conversations": db.list_conversations(user_id, limit=60),
@@ -492,9 +495,10 @@ async def knowledge(user_id: str = "default"):
 @app.get("/api/knowledge/search")
 async def knowledge_search(user_id: str = "default", q: str = "", limit: int = 60):
     rows = db.search_knowledge(user_id=user_id, q=q, limit=max(1, min(limit, 120)))
+    profile = profile_for_user(user_id)
     for row in rows:
         if row.get("item"):
-            row["item"] = with_display_summary(row["item"])
+            row["item"] = with_display_summary(row["item"], profile=profile)
     return {"results": rows}
 
 
@@ -526,7 +530,8 @@ async def decide_profile_candidate(candidate_id: str, req: ProfileCandidateDecis
 
 @app.get("/api/knowledge/graph")
 async def knowledge_graph(user_id: str = "default", limit: int = 80):
-    items = [with_display_summary(row) for row in db.knowledge_graph_items(user_id, limit=max(10, min(limit, 160)))]
+    profile = profile_for_user(user_id)
+    items = [with_display_summary(row, profile=profile) for row in db.knowledge_graph_items(user_id, limit=max(10, min(limit, 160)))]
     return build_knowledge_graph(items)
 
 
@@ -535,7 +540,7 @@ async def compile_knowledge(req: WikiCompileRequest):
     profile = find_profile(req.user_id)
     memory = db.list_profile_memory(req.user_id)
     profile = effective_profile(profile, memory)
-    items = [with_display_summary(row) for row in db.knowledge_graph_items(req.user_id, limit=max(20, min(req.limit, 160)))]
+    items = [with_display_summary(row, profile=profile) for row in db.knowledge_graph_items(req.user_id, limit=max(20, min(req.limit, 160)))]
     notes = db.list_notes(req.user_id)
     conversations = db.list_conversations(req.user_id, limit=40)
     existing = db.list_wiki_pages(req.user_id)
@@ -673,6 +678,13 @@ def find_profile(user_id: str) -> dict[str, Any] | None:
     return config.profiles[0] if config.profiles and user_id == "default" else None
 
 
+def profile_for_user(user_id: str) -> dict[str, Any] | None:
+    profile = find_profile(user_id)
+    if not profile:
+        return None
+    return effective_profile(profile, db.list_profile_memory(user_id))
+
+
 def persist_profiles(profiles: list[dict[str, Any]]) -> None:
     config.profiles[:] = profiles
     write_yaml(profiles_path(), {"profiles": profiles})
@@ -739,12 +751,12 @@ def chat_context(
             min_per_section=int(config.settings.get("ranking", {}).get("digest_min_items_per_section", 4)),
             excluded_fingerprints=set(),
         )
-        selected = [with_display_summary(row) for row in selected]
+        selected = [with_display_summary(row, profile=profile) for row in selected]
         sections = build_digest_sections(selected)
         return selected[:18], digest_context_text(sections, selected, days, item_date=item_date)
 
     if scope == "knowledge":
-        items = [with_display_summary(row) for row in db.knowledge_graph_items(user_id, limit=60)]
+        items = [with_display_summary(row, profile=profile) for row in db.knowledge_graph_items(user_id, limit=60)]
         notes = db.list_notes(user_id)[:20]
         conversations = db.list_conversations(user_id, limit=20)
         wiki_pages = db.list_wiki_pages(user_id)[:20]
@@ -1023,6 +1035,195 @@ def filter_knowledge_stats(stats: dict[str, Any], profile: dict[str, Any] | None
     return {**stats, "top_tags": filtered_tags}
 
 
+def build_taste_model(
+    user_id: str,
+    profile: dict[str, Any],
+    memory_rows: list[dict[str, Any]],
+    stats: dict[str, Any],
+) -> dict[str, Any]:
+    rows = db.taste_feedback_rows(user_id)
+    positive_actions = {"like", "save", "deep_read"}
+    negative_actions = {"ignore", "not_relevant"}
+    positive = [row for row in rows if row.get("action") in positive_actions]
+    negative = [row for row in rows if row.get("action") in negative_actions]
+    top_positive_tags = weighted_top_values(positive, "tags")
+    top_negative_tags = weighted_top_values(negative, "tags")
+    top_positive_sources = weighted_top_values(positive, "source_id", label_key="source_name")
+    top_negative_sources = weighted_top_values(negative, "source_id", label_key="source_name")
+    liked_parts = aggregate_score_parts(positive)
+    rejected_parts = aggregate_score_parts(negative)
+    memory_groups: dict[str, list[str]] = {}
+    for row in memory_rows:
+        memory_groups.setdefault(str(row.get("memory_key") or ""), []).append(str(row.get("memory_value") or ""))
+    summary = taste_summary(profile, positive, negative, top_positive_tags, top_negative_tags, top_positive_sources, liked_parts)
+    knobs = taste_knobs(profile, memory_groups, top_positive_tags, top_negative_tags, top_positive_sources, top_negative_sources)
+    return {
+        "summary": summary,
+        "confidence": taste_confidence(len(positive), len(negative), len(memory_rows)),
+        "signals": {
+            "positive_count": len(positive),
+            "negative_count": len(negative),
+            "memory_count": len(memory_rows),
+            "saved": stats.get("saved", 0),
+            "deep_read": stats.get("deep_read", 0),
+            "notes": stats.get("notes", 0),
+            "conversations": stats.get("conversations", 0),
+        },
+        "top_positive_tags": top_positive_tags,
+        "top_negative_tags": top_negative_tags,
+        "top_positive_sources": top_positive_sources,
+        "top_negative_sources": top_negative_sources,
+        "liked_score_profile": liked_parts,
+        "rejected_score_profile": rejected_parts,
+        "knobs": knobs,
+        "training_hint": "用“有用 / 收藏 / 深读 / 忽略 / 不相关”继续训练；在画像学习里接受或拒绝候选，系统会把这些偏好带入日报排序。",
+    }
+
+
+def taste_confidence(positive_count: int, negative_count: int, memory_count: int) -> dict[str, Any]:
+    signal_count = positive_count + negative_count + memory_count * 2
+    score = min(1.0, signal_count / 40)
+    if score >= 0.72:
+        label = "高"
+        reason = "反馈和画像记忆已经足够形成稳定偏好。"
+    elif score >= 0.34:
+        label = "中"
+        reason = "已有可用信号，但继续反馈会让排序更贴近你的判断。"
+    else:
+        label = "低"
+        reason = "反馈样本还少，当前主要依赖显式画像关键词。"
+    return {"score": round(score, 3), "label": label, "reason": reason, "signal_count": signal_count}
+
+
+def taste_summary(
+    profile: dict[str, Any],
+    positive: list[dict[str, Any]],
+    negative: list[dict[str, Any]],
+    top_tags: list[dict[str, Any]],
+    negative_tags: list[dict[str, Any]],
+    top_sources: list[dict[str, Any]],
+    liked_parts: list[dict[str, Any]],
+) -> list[str]:
+    lines = []
+    primary = clean_profile_list(profile.get("primary_topics", []))[:3]
+    if primary:
+        lines.append("显式画像最关注：" + "、".join(primary))
+    if top_tags:
+        lines.append("行为反馈最常强化：" + "、".join(row["label"] for row in top_tags[:4]))
+    if top_sources:
+        lines.append("更容易被你保留的来源：" + "、".join(row["label"] for row in top_sources[:3]))
+    strongest = [row for row in liked_parts if row.get("value", 0) >= 0.55][:3]
+    if strongest:
+        lines.append("你更偏好这些研究特征：" + "、".join(row["label"] for row in strongest))
+    if negative_tags:
+        lines.append("容易被你降权的主题：" + "、".join(row["label"] for row in negative_tags[:3]))
+    if not positive and not negative:
+        lines.append("还缺少行为反馈，当前品味模型主要来自 Profile 配置。")
+    return lines
+
+
+def taste_knobs(
+    profile: dict[str, Any],
+    memory_groups: dict[str, list[str]],
+    top_positive_tags: list[dict[str, Any]],
+    top_negative_tags: list[dict[str, Any]],
+    top_positive_sources: list[dict[str, Any]],
+    top_negative_sources: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "label": "主兴趣",
+            "value": profile.get("primary_topics", [])[:10],
+            "learned": memory_groups.get("interest", [])[:8],
+            "evidence": [row["label"] for row in top_positive_tags[:6]],
+        },
+        {
+            "label": "降权主题",
+            "value": profile.get("negative_topics", [])[:10],
+            "learned": memory_groups.get("negative", [])[:8],
+            "evidence": [row["label"] for row in top_negative_tags[:6]],
+        },
+        {
+            "label": "偏好来源",
+            "value": profile.get("preferred_sources", [])[:10],
+            "learned": memory_groups.get("preferred_source", [])[:8],
+            "evidence": [row["label"] for row in top_positive_sources[:6]],
+        },
+        {
+            "label": "降低来源",
+            "value": profile.get("deprioritized_sources", [])[:10],
+            "learned": memory_groups.get("deprioritized_source", [])[:8],
+            "evidence": [row["label"] for row in top_negative_sources[:6]],
+        },
+    ]
+
+
+def weighted_top_values(
+    rows: list[dict[str, Any]],
+    field: str,
+    *,
+    label_key: str | None = None,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    scores: dict[str, float] = {}
+    labels: dict[str, str] = {}
+    for row in rows:
+        weight = feedback_action_weight(str(row.get("action") or ""))
+        values = row.get(field)
+        if field == "tags":
+            raw_values = values if isinstance(values, list) else []
+            pairs = [(str(value), str(value)) for value in raw_values if str(value).strip()]
+        else:
+            value = str(values or "").strip()
+            pairs = [(value, str(row.get(label_key) or value))] if value else []
+        for key, label in pairs:
+            if key.lower() in HIDDEN_DISPLAY_TAGS:
+                continue
+            scores[key] = scores.get(key, 0.0) + weight
+            labels[key] = label
+    return [
+        {"id": key, "label": labels.get(key, key), "weight": round(value, 2)}
+        for key, value in sorted(scores.items(), key=lambda item: item[1], reverse=True)[:limit]
+    ]
+
+
+def aggregate_score_parts(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    labels = {
+        "novelty": "新颖性",
+        "significance": "重要性",
+        "actionability": "可行动",
+        "credibility": "可信度",
+        "research_value": "研究价值",
+        "personalization": "个性化匹配",
+        "trend": "趋势热度",
+    }
+    totals: dict[str, float] = {}
+    counts: dict[str, int] = {}
+    for row in rows:
+        parts = row.get("score_parts") or {}
+        for key in labels:
+            if key not in parts:
+                continue
+            try:
+                totals[key] = totals.get(key, 0.0) + float(parts[key])
+                counts[key] = counts.get(key, 0) + 1
+            except (TypeError, ValueError):
+                continue
+    return [
+        {"key": key, "label": labels[key], "value": round(totals[key] / counts[key], 3)}
+        for key in labels
+        if counts.get(key)
+    ]
+
+
+def feedback_action_weight(action: str) -> float:
+    if action == "deep_read":
+        return 1.6
+    if action in {"save", "not_relevant"}:
+        return 1.25
+    return 1.0
+
+
 def build_knowledge_graph(items: list[dict[str, Any]]) -> dict[str, Any]:
     nodes: list[dict[str, Any]] = []
     edges: dict[tuple[str, str], dict[str, Any]] = {}
@@ -1214,7 +1415,7 @@ def validate_item_date(value: str) -> None:
         raise HTTPException(status_code=400, detail="date must use YYYY-MM-DD") from exc
 
 
-def with_display_summary(item: dict[str, Any]) -> dict[str, Any]:
+def with_display_summary(item: dict[str, Any], profile: dict[str, Any] | None = None) -> dict[str, Any]:
     summary_zh = (item.get("summary_zh") or "").strip()
     if not summary_zh:
         if item.get("summary"):
@@ -1231,7 +1432,226 @@ def with_display_summary(item: dict[str, Any]) -> dict[str, Any]:
         "date_kind": date_kind,
         "display_timestamp": date_value,
         "evidence_links": build_evidence_links(item),
+        "research_signal": build_research_signal(item, profile),
     }
+
+
+def build_research_signal(item: dict[str, Any], profile: dict[str, Any] | None = None) -> dict[str, Any]:
+    parts = item.get("score_parts") or {}
+    metadata = item.get("metadata") or {}
+    novelty = score_part(parts, "novelty", "llm_novelty", default=0.35)
+    significance = score_part(parts, "significance", "llm_significance", default=0.35)
+    actionability = score_part(parts, "actionability", "llm_actionability", default=0.35)
+    credibility = score_part(parts, "credibility", "llm_credibility", "authority", default=0.45)
+    personalization = score_part(parts, "personalization", default=0.0)
+    relevance = score_part(parts, "relevance", "llm_relevance", default=0.0)
+    negative_penalty = score_part(parts, "negative_penalty", default=0.0)
+    noise = noise_risk_score(item, novelty, significance, actionability, credibility, negative_penalty)
+    overall = (
+        novelty * 0.25
+        + significance * 0.25
+        + actionability * 0.18
+        + credibility * 0.16
+        + max(personalization, 0) * 0.10
+        + relevance * 0.12
+        - noise * 0.18
+    )
+    novelty_reasons = novelty_reasons_for_item(item, metadata, novelty)
+    noise_reasons = noise_reasons_for_item(item, metadata, noise, credibility, negative_penalty)
+    taste_reasons = taste_match_reasons(item, profile, personalization, relevance, negative_penalty)
+    return {
+        "overall": round(max(0.0, min(1.0, overall)), 3),
+        "overall_label": research_signal_label(overall),
+        "novelty": round(novelty, 3),
+        "novelty_label": signal_level_label(novelty),
+        "noise_risk": round(noise, 3),
+        "noise_label": noise_level_label(noise),
+        "significance": round(significance, 3),
+        "actionability": round(actionability, 3),
+        "credibility": round(credibility, 3),
+        "taste_match": round(max(-1.0, min(1.0, personalization + relevance * 0.35 - negative_penalty * 0.5)), 3),
+        "why_new": novelty_reasons[:3],
+        "why_noise": noise_reasons[:3],
+        "taste_reasons": taste_reasons[:3],
+        "verdict": signal_verdict(item, overall, noise, novelty, significance, taste_reasons),
+    }
+
+
+def score_part(parts: dict[str, Any], *keys: str, default: float = 0.0) -> float:
+    values = []
+    for key in keys:
+        if key not in parts:
+            continue
+        try:
+            values.append(float(parts[key]))
+        except (TypeError, ValueError):
+            continue
+    if not values:
+        return default
+    return max(0.0, min(1.0, max(values)))
+
+
+def noise_risk_score(
+    item: dict[str, Any],
+    novelty: float,
+    significance: float,
+    actionability: float,
+    credibility: float,
+    negative_penalty: float,
+) -> float:
+    metadata = item.get("metadata") or {}
+    risk = 0.22
+    if credibility < 0.45:
+        risk += 0.22
+    if novelty < 0.42 and significance < 0.45:
+        risk += 0.18
+    if actionability < 0.38 and item.get("source_type") not in {"paper", "blog"}:
+        risk += 0.12
+    if item.get("source_id") in {"hackernews", "aihot_public"} and not metadata.get("aihot_reason"):
+        risk += 0.12
+    if item.get("date_kind") == "discovered" or (not item.get("published_at") and item.get("source_type") != "repo"):
+        risk += 0.08
+    if negative_penalty >= 0.2:
+        risk += min(0.25, negative_penalty * 0.5)
+    if metadata.get("pdf_url") or item.get("source_id") == "github" or item.get("evidence_role") in {"primary_research", "official_update"}:
+        risk -= 0.08
+    return max(0.0, min(1.0, risk))
+
+
+def novelty_reasons_for_item(item: dict[str, Any], metadata: dict[str, Any], novelty: float) -> list[str]:
+    reasons = []
+    post = (metadata.get("llm_postprocess") or {})
+    dims = post.get("dimensions") or {}
+    if dims.get("novelty") is not None:
+        reasons.append(f"GPT 后处理给出新颖性 {format_percent(dims.get('novelty'))}")
+    if item.get("source_id") == "github":
+        reasons.append("包含代码仓库，可直接检查实现和 examples")
+    if metadata.get("pdf_url") or item.get("source_type") == "paper":
+        reasons.append("正式论文/预印本，可追踪方法、实验和引用")
+    if metadata.get("aihot_reason"):
+        reasons.append("外部精选源给出独立推荐理由")
+    if metadata.get("aihot_score"):
+        reasons.append(f"AIHOT 热度 {metadata.get('aihot_score')}")
+    if item.get("evidence_role") == "official_update":
+        reasons.append("来自官方更新，适合捕捉能力或产品变化")
+    if not reasons and novelty >= 0.62:
+        reasons.append("标题、摘要或标签中出现新发布/基准/开源等新颖性信号")
+    if not reasons:
+        reasons.append("暂未发现强新颖性证据，建议作为快速扫读项")
+    return reasons
+
+
+def noise_reasons_for_item(
+    item: dict[str, Any],
+    metadata: dict[str, Any],
+    noise: float,
+    credibility: float,
+    negative_penalty: float,
+) -> list[str]:
+    reasons = []
+    if negative_penalty >= 0.2:
+        reasons.append("命中当前画像的降权主题")
+    if credibility < 0.45:
+        reasons.append("证据强度偏弱，需要打开原始来源核验")
+    if item.get("source_id") in {"hackernews", "aihot_public"} and not metadata.get("aihot_reason"):
+        reasons.append("二级信息流信号，可能混入趋势噪音")
+    if item.get("date_kind") == "discovered" or (not item.get("published_at") and item.get("source_type") != "repo"):
+        reasons.append("缺少可靠发布日期，按发现时间排序")
+    if noise < 0.35:
+        reasons.append("噪音风险较低：来源、可验证性或研究价值信号较完整")
+    return reasons
+
+
+def taste_match_reasons(
+    item: dict[str, Any],
+    profile: dict[str, Any] | None,
+    personalization: float,
+    relevance: float,
+    negative_penalty: float,
+) -> list[str]:
+    if not profile:
+        return ["未选择画像，当前只展示通用研究信号"]
+    text = f"{item.get('title', '')}\n{item.get('summary', '')}\n{' '.join(item.get('tags', []))}".lower()
+    reasons = []
+    primary_hits = topic_hits(text, profile.get("primary_topics", []))
+    secondary_hits = topic_hits(text, profile.get("secondary_topics", []))
+    negative_hits = topic_hits(text, profile.get("negative_topics", []))
+    if primary_hits:
+        reasons.append("命中主兴趣：" + "、".join(primary_hits[:3]))
+    if secondary_hits and len(reasons) < 3:
+        reasons.append("命中次兴趣：" + "、".join(secondary_hits[:3]))
+    if item.get("source_id") in set(profile.get("preferred_sources", [])):
+        reasons.append("来自你偏好的来源")
+    if personalization >= 0.25:
+        reasons.append("与你过去收藏/深读的标签或来源相似")
+    if negative_hits or negative_penalty >= 0.2:
+        reasons.append("也命中降权项：" + "、".join(negative_hits[:3] or ["画像降权信号"]))
+    if not reasons and relevance < 0.25:
+        reasons.append("与当前画像关系较弱，适合只扫标题")
+    return reasons
+
+
+def topic_hits(text: str, topics: list[Any]) -> list[str]:
+    hits = []
+    for topic in topics or []:
+        value = str(topic or "").strip()
+        if value and value.lower() in text:
+            hits.append(value)
+    return hits
+
+
+def research_signal_label(value: float) -> str:
+    if value >= 0.72:
+        return "强研究信号"
+    if value >= 0.52:
+        return "值得看"
+    if value >= 0.34:
+        return "扫读"
+    return "低优先级"
+
+
+def signal_level_label(value: float) -> str:
+    if value >= 0.72:
+        return "高"
+    if value >= 0.48:
+        return "中"
+    return "低"
+
+
+def noise_level_label(value: float) -> str:
+    if value >= 0.68:
+        return "高噪音"
+    if value >= 0.42:
+        return "需核验"
+    return "低噪音"
+
+
+def signal_verdict(
+    item: dict[str, Any],
+    overall: float,
+    noise: float,
+    novelty: float,
+    significance: float,
+    taste_reasons: list[str],
+) -> str:
+    if noise >= 0.7:
+        return "先核验来源，再决定是否投入阅读。"
+    if overall >= 0.72 and taste_reasons:
+        return "优先读：兼具研究信号和画像匹配。"
+    if novelty >= 0.7 and significance >= 0.55:
+        return "适合深读：新颖性和重要性都较强。"
+    if item.get("source_id") == "github":
+        return "适合试用：先看 README、examples 和最近 commit。"
+    if overall >= 0.5:
+        return "值得扫读，读完后用反馈训练品味模型。"
+    return "低优先级，除非标题正好关联当前任务。"
+
+
+def format_percent(value: Any) -> str:
+    try:
+        return str(round(float(value) * 100))
+    except (TypeError, ValueError):
+        return "-"
 
 
 def visible_tags(tags: list[Any] | tuple[Any, ...] | None) -> list[str]:

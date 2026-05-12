@@ -1209,6 +1209,39 @@ class Database:
             source_bucket[source_id] = source_bucket.get(source_id, 0.0) + weight
         return signals
 
+    def taste_feedback_rows(self, user_id: str, limit: int = 600) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    f.action,
+                    f.created_at AS feedback_created_at,
+                    i.id,
+                    i.source_id,
+                    i.source_name,
+                    i.source_type,
+                    i.title,
+                    i.tags_json,
+                    i.quality_score,
+                    i.score_parts_json,
+                    i.metadata_json
+                FROM feedback f
+                JOIN items i ON i.id = f.item_id
+                WHERE f.user_id=?
+                ORDER BY f.created_at DESC
+                LIMIT ?
+                """,
+                (user_id, max(1, min(limit, 2000))),
+            ).fetchall()
+        out = []
+        for row in rows:
+            item = dict(row)
+            item["tags"] = json.loads(item.pop("tags_json") or "[]")
+            item["score_parts"] = json.loads(item.pop("score_parts_json") or "{}")
+            item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
+            out.append(item)
+        return out
+
     def add_feedback(self, user_id: str, item_id: str, action: str, note: str | None = None) -> None:
         with self.connect() as conn:
             created_at = datetime.now(timezone.utc).isoformat()

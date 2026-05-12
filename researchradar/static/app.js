@@ -113,6 +113,15 @@ const KNOWLEDGE_KIND_LABELS = {
   wiki: "Wiki",
 };
 
+const SIGNAL_PART_LABELS = {
+  novelty: "新颖",
+  significance: "重要",
+  actionability: "可行动",
+  credibility: "可信",
+  taste_match: "品味",
+  noise_risk: "噪音",
+};
+
 let toastTimer = null;
 
 async function api(path, options = {}) {
@@ -451,6 +460,38 @@ function renderItemFacts(item) {
   return facts.map((fact) => `<span class="mini-fact">${escapeHtml(fact)}</span>`).join("");
 }
 
+function renderSignalBadges(item, compact = false) {
+  const signal = item.research_signal || {};
+  if (!Object.keys(signal).length) return "";
+  const badges = [];
+  if (signal.overall_label) {
+    badges.push(`<span class="signal-badge ${signalClass(signal.overall)}">${escapeHtml(signal.overall_label)} ${escapeHtml(formatScore(signal.overall))}</span>`);
+  }
+  if (!compact && signal.novelty_label) {
+    badges.push(`<span class="signal-badge signal-novelty">新颖 ${escapeHtml(signal.novelty_label)}</span>`);
+  }
+  if (!compact && signal.noise_label) {
+    badges.push(`<span class="signal-badge ${noiseClass(signal.noise_risk)}">噪音 ${escapeHtml(signal.noise_label)}</span>`);
+  }
+  return badges.join("");
+}
+
+function signalClass(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "signal-low";
+  if (number >= 0.72) return "signal-strong";
+  if (number >= 0.52) return "signal-good";
+  return "signal-low";
+}
+
+function noiseClass(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "signal-low";
+  if (number >= 0.68) return "signal-noise-high";
+  if (number >= 0.42) return "signal-noise-mid";
+  return "signal-noise-low";
+}
+
 function formatScore(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "";
@@ -473,6 +514,7 @@ function renderItem(item, mode = "radar") {
   const tags = visibleTags(item.tags).slice(0, 6).map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("");
   const summary = item.display_summary || item.summary_zh || "中文摘要生成中，请稍后刷新。";
   const facts = renderItemFacts(item);
+  const signalBadges = renderSignalBadges(item, mode === "digest");
   return `
     <article class="item-card${selected}" data-id="${escapeHtml(item.id)}" data-type="${escapeHtml(item.source_type || "")}" tabindex="0">
       <div class="item-meta">
@@ -481,6 +523,7 @@ function renderItem(item, mode = "radar") {
         <span class="muted">${escapeHtml(formatItemDate(item))}</span>
         ${score}
         ${facts}
+        ${signalBadges}
       </div>
       <h3>${escapeHtml(item.title)}</h3>
       <p class="rich-text">${renderRichText(summary, mode === "digest" ? 260 : 320)}</p>
@@ -540,6 +583,10 @@ function selectItem(item) {
 function renderDetailReasons(item) {
   const target = $("detailReasons");
   const rows = [];
+  const signal = item.research_signal || {};
+  if (Object.keys(signal).length) {
+    rows.push(["研究判断", renderSignalDetail(signal), "html"]);
+  }
   if (item.recommended_action) {
     rows.push(["建议动作", item.recommended_action]);
   }
@@ -553,13 +600,45 @@ function renderDetailReasons(item) {
   }
   target.classList.remove("hidden");
   target.innerHTML = rows
-    .map(([label, value]) => `
+    .map(([label, value, mode]) => `
       <div>
         <span>${escapeHtml(label)}</span>
-        <p>${escapeHtml(value)}</p>
+        ${mode === "html" ? value : `<p>${escapeHtml(value)}</p>`}
       </div>
     `)
     .join("");
+}
+
+function renderSignalDetail(signal) {
+  const metrics = ["novelty", "significance", "actionability", "credibility", "taste_match", "noise_risk"]
+    .filter((key) => signal[key] !== undefined && signal[key] !== null)
+    .map((key) => `
+      <div class="signal-meter">
+        <span>${escapeHtml(SIGNAL_PART_LABELS[key] || key)}</span>
+        <strong>${escapeHtml(formatScore(signal[key]))}</strong>
+      </div>
+    `)
+    .join("");
+  const groups = [
+    ["为什么新", signal.why_new],
+    ["噪音风险", signal.why_noise],
+    ["品味匹配", signal.taste_reasons],
+  ]
+    .filter(([, values]) => values && values.length)
+    .map(([label, values]) => `
+      <div class="signal-list">
+        <b>${escapeHtml(label)}</b>
+        <ul>${values.map((value) => `<li>${escapeHtml(value)}</li>`).join("")}</ul>
+      </div>
+    `)
+    .join("");
+  return `
+    <div class="signal-detail">
+      <div class="signal-verdict">${escapeHtml(signal.verdict || signal.overall_label || "")}</div>
+      <div class="signal-meters">${metrics}</div>
+      ${groups}
+    </div>
+  `;
 }
 
 function scorePartsText(parts) {
@@ -751,7 +830,7 @@ async function loadArxiv(options = {}) {
     const q = encodeURIComponent(state.search || "");
     const offset = append ? page.items.length : 0;
     const data = await api(
-      `/api/items?source_id=arxiv_core&date=${encodeURIComponent(state.arxivDate)}&q=${q}&limit=${PAGE_SIZE}&offset=${offset}`
+      `/api/items?user_id=${encodeURIComponent(state.profile)}&source_id=arxiv_core&date=${encodeURIComponent(state.arxivDate)}&q=${q}&limit=${PAGE_SIZE}&offset=${offset}`
     );
     page.total = data.total;
     page.items = append ? page.items.concat(data.items) : data.items;
@@ -795,7 +874,7 @@ async function loadRadar(options = {}) {
     const offset = append ? page.items.length : 0;
     const dateParam = state.radarDate === "__all__" ? "" : `date=${encodeURIComponent(state.radarDate)}&`;
     const data = await api(
-      `/api/items?${dateParam}source_type=${encodeURIComponent(type)}&q=${q}&days=${encodeURIComponent(days)}&limit=${PAGE_SIZE}&offset=${offset}`
+      `/api/items?${dateParam}user_id=${encodeURIComponent(state.profile)}&source_type=${encodeURIComponent(type)}&q=${q}&days=${encodeURIComponent(days)}&limit=${PAGE_SIZE}&offset=${offset}`
     );
     page.total = data.total;
     page.items = append ? page.items.concat(data.items) : data.items;
@@ -834,7 +913,7 @@ async function loadBlogs(options = {}) {
     const q = encodeURIComponent(state.search || "");
     const offset = append ? page.items.length : 0;
     const data = await api(
-      `/api/items?source_type=blog%2Ccn_community&date=${encodeURIComponent(state.blogDate)}&q=${q}&limit=${PAGE_SIZE}&offset=${offset}`
+      `/api/items?user_id=${encodeURIComponent(state.profile)}&source_type=blog%2Ccn_community&date=${encodeURIComponent(state.blogDate)}&q=${q}&limit=${PAGE_SIZE}&offset=${offset}`
     );
     page.total = data.total;
     page.items = append ? page.items.concat(data.items) : data.items;
@@ -890,6 +969,7 @@ async function loadNotes() {
   state.knowledge.wikiPages = data.wiki_pages || [];
   renderKnowledgeStats(data.stats || {});
   renderKnowledgeProfile(data.profile || {}, data.stats || {});
+  renderTasteModel(data.taste_model || {});
   renderProfileLearning(data.profile_candidates || [], data.profile_memory || []);
   renderKnowledgeQueue(data.items || []);
   renderConversations(data.conversations || []);
@@ -929,10 +1009,11 @@ function renderProfileTags(items, emptyText = "暂无") {
 }
 
 function renderProfileField(label, value) {
+  const display = value === undefined || value === null || value === "" ? "未设置" : value;
   return `
     <div class="profile-field">
       <span>${escapeHtml(label)}</span>
-      <strong>${escapeHtml(value || "未设置")}</strong>
+      <strong>${escapeHtml(display)}</strong>
     </div>
   `;
 }
@@ -975,6 +1056,110 @@ function renderKnowledgeProfile(profile, stats) {
           ${renderProfileField("代码链接", profile.include_code_links ? "需要" : "不强制")}
         </div>
       </section>
+    </div>
+  `;
+}
+
+function renderTasteModel(model) {
+  const confidence = model.confidence || {};
+  const signals = model.signals || {};
+  const summary = (model.summary || []).map((line) => `<li>${escapeHtml(line)}</li>`).join("");
+  const positiveTags = renderWeightedTags(model.top_positive_tags, "暂无正向主题");
+  const negativeTags = renderWeightedTags(model.top_negative_tags, "暂无降权主题");
+  const positiveSources = renderWeightedTags(model.top_positive_sources, "暂无偏好来源");
+  const likedProfile = renderScoreProfile(model.liked_score_profile);
+  const knobs = renderTasteKnobs(model.knobs || []);
+  $("tasteModel").innerHTML = `
+    <div class="subhead profile-head">
+      <h3>个人研究品味模型</h3>
+      <span class="muted profile-title">置信度 ${escapeHtml(confidence.label || "低")} · ${escapeHtml(confidence.signal_count || 0)} 个训练信号</span>
+    </div>
+    <div class="taste-layout">
+      <section class="taste-block taste-summary">
+        <h4>系统现在如何理解你</h4>
+        <ul>${summary || "<li>还没有足够反馈，先按显式画像推荐。</li>"}</ul>
+        <p>${escapeHtml(confidence.reason || "")}</p>
+      </section>
+      <section class="taste-block">
+        <h4>正向主题</h4>
+        <div class="tags">${positiveTags}</div>
+      </section>
+      <section class="taste-block">
+        <h4>降权主题</h4>
+        <div class="tags">${negativeTags}</div>
+      </section>
+      <section class="taste-block">
+        <h4>偏好来源</h4>
+        <div class="tags">${positiveSources}</div>
+      </section>
+      <section class="taste-block">
+        <h4>你常保留的特征</h4>
+        ${likedProfile}
+      </section>
+      <section class="taste-block taste-counters">
+        <h4>训练样本</h4>
+        <div class="profile-fields">
+          ${renderProfileField("正向反馈", signals.positive_count || 0)}
+          ${renderProfileField("负向反馈", signals.negative_count || 0)}
+          ${renderProfileField("画像记忆", signals.memory_count || 0)}
+          ${renderProfileField("笔记", signals.notes || 0)}
+        </div>
+      </section>
+    </div>
+    ${knobs}
+    <div class="taste-hint">${escapeHtml(model.training_hint || "")}</div>
+  `;
+}
+
+function renderWeightedTags(rows, emptyText) {
+  if (!rows || !rows.length) return `<span class="muted">${escapeHtml(emptyText)}</span>`;
+  return rows
+    .slice(0, 8)
+    .map((row) => `<span class="tag">${escapeHtml(row.label || row.id)} · ${escapeHtml(row.weight)}</span>`)
+    .join("");
+}
+
+function renderScoreProfile(rows) {
+  if (!rows || !rows.length) return `<p class="muted">还没有足够评分样本。</p>`;
+  return `
+    <div class="taste-bars">
+      ${rows
+        .slice(0, 7)
+        .map((row) => `
+          <div class="taste-bar">
+            <span>${escapeHtml(row.label)}</span>
+            <div><i style="width:${Math.max(4, Math.min(100, Number(formatScore(row.value))))}%"></i></div>
+            <strong>${escapeHtml(formatScore(row.value))}</strong>
+          </div>
+        `)
+        .join("")}
+    </div>
+  `;
+}
+
+function renderTasteKnobs(knobs) {
+  if (!knobs.length) return "";
+  return `
+    <div class="taste-knobs">
+      ${knobs
+        .map((knob) => `
+          <section class="taste-knob">
+            <h4>${escapeHtml(knob.label)}</h4>
+            <div class="taste-knob-row">
+              <span>显式</span>
+              <div class="tags">${renderProfileTags(knob.value, "暂无")}</div>
+            </div>
+            <div class="taste-knob-row">
+              <span>学到</span>
+              <div class="tags">${renderProfileTags(knob.learned, "暂无")}</div>
+            </div>
+            <div class="taste-knob-row">
+              <span>证据</span>
+              <div class="tags">${renderProfileTags(knob.evidence, "暂无")}</div>
+            </div>
+          </section>
+        `)
+        .join("")}
     </div>
   `;
 }
