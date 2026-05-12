@@ -3,6 +3,7 @@ server:
   port: 8765
 
 crawl:
+  scheduler_enabled: true
   timezone: "Asia/Shanghai"
   # arXiv announces new submissions at 20:00 US Eastern, Sunday through Thursday.
   daily_time_timezone: "America/New_York"

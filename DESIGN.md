@@ -253,6 +253,8 @@ Full arXiv Radar          Personal Ranker
 - 全局采集一次，形成 shared candidate pool。
 - 对每个用户单独计算 relevance、novelty、ranking、digest。
 - 公共知识库保存全量 item，个人知识库保存收藏、反馈、notes、profile memory。
+- v1 实现中，服务端启动调度器前会获取本地 `data/scheduler.lock`，避免多个 Web 实例重复执行 catch-up 和每日抓取。
+- 日报缓存必须带上 effective profile version。用户接受 profile memory 后，新的 digest 会绕开旧缓存重新排序。
 
 ## 9. Agent 与模块设计
 
@@ -380,6 +382,8 @@ FinalScore =
 - 不把完整聊天直接写进长期知识库。
 - 从对话中抽取稳定、有用、可复用的 research note。
 - 生成 profile update candidate。
+- v1 中保存问答时会生成结构化蒸馏笔记：问题、结论摘要、相关来源、上下文摘录和 conversation id。后续可替换为 LLM distiller，但长期知识库不再保存裸回答。
+- profile update candidate 不在知识库 GET 页面自动生成，而由显式用户操作、反馈事件或周期 consolidation 触发，避免读接口产生写入副作用。
 
 蒸馏输出：
 
@@ -522,6 +526,19 @@ ResearchNote 字段：
 - status：pending / accepted / rejected / auto_applied
 - created_at
 
+### 10.8 ProfileMemory 与 Digest Cache
+
+核心字段：
+
+- user_id
+- memory_key：interest / negative / preferred_source / deprioritized_source
+- memory_value
+- weight
+- source_candidate_id
+- created_at
+
+运行时使用 base profile + accepted profile memory 形成 effective profile。digest_runs 记录 profile_version，profile memory 变化后不会继续复用旧日报缓存。
+
 ## 11. 知识库设计
 
 知识库分三层，不把所有内容直接塞进向量库。
@@ -542,6 +559,7 @@ ResearchNote 字段：
 
 用于搜索、推荐和 RAG：
 
+- v1 已实现 SQLite FTS5 `knowledge_fts`，覆盖 viewed/saved/liked items、notes、conversations、wiki_pages，并保留 SQL LIKE 回退。
 - embeddings
 - topics
 - entities

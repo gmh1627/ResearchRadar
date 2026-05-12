@@ -10,6 +10,7 @@ const state = {
   view: "digest",
   selectedItem: null,
   search: "",
+  digestDate: "__all__",
   arxivDate: "",
   blogDate: "",
   radarDate: "",
@@ -28,6 +29,12 @@ const state = {
   wiki: {
     pages: [],
     activeSlug: "",
+  },
+  knowledge: {
+    items: [],
+    notes: [],
+    conversations: [],
+    wikiPages: [],
   },
 };
 
@@ -81,6 +88,27 @@ const FEEDBACK_ACTION_LABELS = {
   like: "有用",
   ignore: "忽略",
   not_relevant: "不相关",
+};
+
+const PROFILE_UPDATE_LABELS = {
+  increase_interest: "增强兴趣",
+  add_negative: "加入降权",
+  prefer_source: "偏好来源",
+  decrease_source: "降低来源",
+};
+
+const MEMORY_KEY_LABELS = {
+  interest: "兴趣",
+  negative: "降权",
+  preferred_source: "偏好来源",
+  deprioritized_source: "降低来源",
+};
+
+const KNOWLEDGE_KIND_LABELS = {
+  item: "条目",
+  note: "笔记",
+  conversation: "问答",
+  wiki: "Wiki",
 };
 
 let toastTimer = null;
@@ -619,10 +647,20 @@ async function loadProfiles() {
 
 async function loadDigest() {
   const days = $("digestDays").value;
-  const data = await api(`/api/digest?user_id=${encodeURIComponent(state.profile)}&days=${days}`);
+  await loadDateChoices({
+    selectId: "digestDate",
+    countId: "digestMeta",
+    dateKey: "digestDate",
+    params: `days=${encodeURIComponent(days)}`,
+    includeAll: true,
+    allLabel: `全部近 ${days} 天`,
+  });
+  const dateParam = state.digestDate === "__all__" ? "" : `&date=${encodeURIComponent(state.digestDate)}`;
+  const data = await api(`/api/digest?user_id=${encodeURIComponent(state.profile)}&days=${days}${dateParam}`);
   const count = (data.items || []).length;
   const upper = data.limit ? ` / 上限 ${data.limit}` : "";
-  $("digestMeta").textContent = `${data.profile.display_name || data.profile.user_id} · ${formatDate(data.generated_at, "full")} · ${count}${upper} 条`;
+  const scope = data.scope_label || (state.digestDate === "__all__" ? `近 ${days} 天` : state.digestDate);
+  $("digestMeta").textContent = `${data.profile.display_name || data.profile.user_id} · ${scope} · ${formatDate(data.generated_at, "full")} · ${count}${upper} 条`;
   renderDigestSections(data.sections || [], data.items || []);
 }
 
@@ -655,9 +693,9 @@ function renderDigestSections(sections, fallbackItems) {
   typesetMath(container);
 }
 
-async function loadDateChoices({ selectId, countId, dateKey, params }) {
+async function loadDateChoices({ selectId, countId, dateKey, params, includeAll = false, allLabel = "全部" }) {
   const q = encodeURIComponent(state.search || "");
-  const data = await api(`/api/dates?${params}&q=${q}&days=365&limit=366`);
+  const data = await api(`/api/dates?${params}&q=${q}&limit=366`);
   const rows = data.dates || [];
   const select = $(selectId);
   if (!rows.length) {
@@ -667,12 +705,15 @@ async function loadDateChoices({ selectId, countId, dateKey, params }) {
     $(countId).textContent = "暂无数据";
     return "";
   }
+  const options = includeAll
+    ? [{ date: "__all__", count: rows.reduce((sum, row) => sum + Number(row.count || 0), 0), label: allLabel }, ...rows]
+    : rows;
   const current = state[dateKey];
-  const selected = rows.some((row) => row.date === current) ? current : rows[0].date;
+  const selected = options.some((row) => row.date === current) ? current : options[0].date;
   state[dateKey] = selected;
   select.disabled = false;
-  select.innerHTML = rows
-    .map((row) => `<option value="${escapeHtml(row.date)}">${escapeHtml(formatDayLabel(row.date))} · ${row.count} 条</option>`)
+  select.innerHTML = options
+    .map((row) => `<option value="${escapeHtml(row.date)}">${escapeHtml(row.label || formatDayLabel(row.date))} · ${row.count} 条</option>`)
     .join("");
   select.value = selected;
   return selected;
@@ -686,7 +727,7 @@ async function loadArxiv(options = {}) {
       selectId: "arxivDate",
       countId: "arxivCount",
       dateKey: "arxivDate",
-      params: "source_id=arxiv_core",
+      params: "source_id=arxiv_core&days=365",
     });
   }
   if (!state.arxivDate) {
@@ -720,12 +761,15 @@ async function loadArxiv(options = {}) {
 async function loadRadar(options = {}) {
   const append = options.append === true;
   const reloadDates = options.reloadDates !== false && !append;
+  const days = $("daysFilter").value || "14";
   if (reloadDates || !state.radarDate) {
     await loadDateChoices({
       selectId: "radarDate",
       countId: "radarCount",
       dateKey: "radarDate",
-      params: `source_type=${encodeURIComponent($("typeFilter").value || "")}`,
+      params: `source_type=${encodeURIComponent($("typeFilter").value || "")}&days=${encodeURIComponent(days)}`,
+      includeAll: true,
+      allLabel: `全部近 ${days} 天`,
     });
   }
   if (!state.radarDate) {
@@ -743,12 +787,14 @@ async function loadRadar(options = {}) {
     const type = $("typeFilter").value;
     const q = encodeURIComponent(state.search || "");
     const offset = append ? page.items.length : 0;
+    const dateParam = state.radarDate === "__all__" ? "" : `date=${encodeURIComponent(state.radarDate)}&`;
     const data = await api(
-      `/api/items?date=${encodeURIComponent(state.radarDate)}&source_type=${encodeURIComponent(type)}&q=${q}&limit=${PAGE_SIZE}&offset=${offset}`
+      `/api/items?${dateParam}source_type=${encodeURIComponent(type)}&q=${q}&days=${encodeURIComponent(days)}&limit=${PAGE_SIZE}&offset=${offset}`
     );
     page.total = data.total;
     page.items = append ? page.items.concat(data.items) : data.items;
-    $("radarCount").textContent = `显示 ${page.items.length} / 共 ${page.total} 条`;
+    const scopeText = state.radarDate === "__all__" ? `近 ${days} 天` : formatDayLabel(state.radarDate);
+    $("radarCount").textContent = `${scopeText} · 显示 ${page.items.length} / 共 ${page.total} 条`;
     renderList("radarList", page.items, "radar", "暂无雷达数据。");
   } finally {
     page.loading = false;
@@ -764,7 +810,7 @@ async function loadBlogs(options = {}) {
       selectId: "blogDate",
       countId: "blogCount",
       dateKey: "blogDate",
-      params: "source_type=blog%2Ccn_community",
+      params: "source_type=blog%2Ccn_community&days=365",
     });
   }
   if (!state.blogDate) {
@@ -832,8 +878,13 @@ async function loadSources() {
 
 async function loadNotes() {
   const data = await api(`/api/knowledge?user_id=${encodeURIComponent(state.profile)}`);
+  state.knowledge.items = data.items || [];
+  state.knowledge.notes = data.notes || [];
+  state.knowledge.conversations = data.conversations || [];
+  state.knowledge.wikiPages = data.wiki_pages || [];
   renderKnowledgeStats(data.stats || {});
   renderKnowledgeProfile(data.profile || {}, data.stats || {});
+  renderProfileLearning(data.profile_candidates || [], data.profile_memory || []);
   renderKnowledgeQueue(data.items || []);
   renderConversations(data.conversations || []);
   renderNotes(data.notes || []);
@@ -922,6 +973,53 @@ function renderKnowledgeProfile(profile, stats) {
   `;
 }
 
+function renderProfileLearning(candidates, memory) {
+  const memoryRows = (memory || []).slice(0, 18);
+  const candidateRows = (candidates || []).slice(0, 12);
+  const memoryHtml = memoryRows.length
+    ? memoryRows
+        .map((row) => `
+          <span class="tag">${escapeHtml(MEMORY_KEY_LABELS[row.memory_key] || row.memory_key)} · ${escapeHtml(row.memory_value)}</span>
+        `)
+        .join("")
+    : `<span class="muted">还没有接受的画像记忆。</span>`;
+  const candidateHtml = candidateRows.length
+    ? candidateRows
+        .map((candidate) => `
+          <article class="profile-candidate">
+            <div>
+              <div class="item-meta">
+                <span class="pill">${escapeHtml(PROFILE_UPDATE_LABELS[candidate.update_type] || candidate.update_type)}</span>
+                <span class="mini-fact">置信 ${escapeHtml(formatScore(candidate.confidence))}</span>
+              </div>
+              <h4>${escapeHtml(candidate.topic)}</h4>
+              <p>${escapeHtml(candidate.reason)}</p>
+            </div>
+            <div class="candidate-actions">
+              <button data-id="${escapeHtml(candidate.id)}" data-decision="accept" class="candidate-decision">接受</button>
+              <button data-id="${escapeHtml(candidate.id)}" data-decision="reject" class="candidate-decision ghost">拒绝</button>
+            </div>
+          </article>
+        `)
+        .join("")
+    : `<div class="empty-state compact-empty">暂无待确认的画像更新。</div>`;
+  $("profileLearning").innerHTML = `
+    <div class="subhead profile-head">
+      <h3>画像学习</h3>
+      <div class="profile-learning-actions">
+        <span class="muted profile-title">基于收藏、深读、有用、忽略和不相关反馈生成</span>
+        <button id="generateProfileCandidatesBtn">生成建议</button>
+      </div>
+    </div>
+    <div class="profile-memory">${memoryHtml}</div>
+    <div class="profile-candidates">${candidateHtml}</div>
+  `;
+  $("generateProfileCandidatesBtn").addEventListener("click", () => generateProfileCandidates().catch(showError));
+  $("profileLearning").querySelectorAll(".candidate-decision").forEach((button) => {
+    button.addEventListener("click", () => decideProfileCandidate(button.dataset.id, button.dataset.decision).catch(showError));
+  });
+}
+
 function renderKnowledgeQueue(items) {
   rememberItems(items);
   $("knowledgeQueue").innerHTML =
@@ -986,6 +1084,54 @@ function renderNotes(notes) {
       .join("") || `<div class="empty-state">暂无知识笔记。</div>`;
   bindDeleteActions($("notesList"));
   typesetMath($("notesList"));
+}
+
+function renderKnowledgeSearchResults(results, query) {
+  const container = $("knowledgeSearchResults");
+  if (!query) {
+    container.classList.add("hidden");
+    container.innerHTML = "";
+    return;
+  }
+  container.classList.remove("hidden");
+  container.innerHTML =
+    (results || [])
+      .map((row) => `
+        <article class="knowledge-result" data-kind="${escapeHtml(row.kind)}" data-id="${escapeHtml(row.id)}">
+          <div class="item-meta">
+            <span class="pill">${escapeHtml(KNOWLEDGE_KIND_LABELS[row.kind] || row.kind)}</span>
+            ${row.search_mode ? `<span class="mini-fact">${escapeHtml(row.search_mode.toUpperCase())}</span>` : ""}
+            <span class="muted">${escapeHtml(row.subtitle || "")}</span>
+            <span class="muted">${escapeHtml(formatDate(row.created_at, "full"))}</span>
+          </div>
+          <h3>${escapeHtml(row.title || "Untitled")}</h3>
+          <p class="rich-text">${renderRichText(row.snippet || "", 260)}</p>
+        </article>
+      `)
+      .join("") || `<div class="empty-state compact-empty">没有找到与“${escapeHtml(query)}”匹配的知识沉淀。</div>`;
+  container.querySelectorAll(".knowledge-result").forEach((card) => {
+    card.addEventListener("click", () => openKnowledgeResult(card.dataset.kind, card.dataset.id).catch(showError));
+  });
+  typesetMath(container);
+}
+
+async function openKnowledgeResult(kind, id) {
+  if (kind === "item") {
+    const detail = await api(`/api/items/${encodeURIComponent(id)}?user_id=${encodeURIComponent(state.profile)}`);
+    selectItem(detail);
+    return;
+  }
+  if (kind === "wiki") {
+    const page = state.wiki.pages.find((candidate) => candidate.slug === id);
+    if (page) {
+      state.wiki.activeSlug = id;
+      renderWikiPages(state.wiki.pages);
+      renderWikiReader(page);
+      $("wikiReader").scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+    return;
+  }
+  showToast(kind === "note" ? "笔记已在下方列表中" : "问答已在最近问答中");
 }
 
 function renderWiki(pages, logRows) {
@@ -1581,6 +1727,55 @@ async function deleteNote(noteId) {
   await loadNotes();
 }
 
+async function decideProfileCandidate(candidateId, decision) {
+  const data = await api(`/api/profile-candidates/${encodeURIComponent(candidateId)}`, {
+    method: "POST",
+    body: JSON.stringify({ user_id: state.profile, decision }),
+  });
+  renderProfileLearning(data.profile_candidates || [], data.profile_memory || []);
+  showToast(decision === "accept" ? "画像记忆已接受" : "画像候选已拒绝");
+}
+
+async function generateProfileCandidates() {
+  const button = $("generateProfileCandidatesBtn");
+  if (button) {
+    button.disabled = true;
+    button.textContent = "生成中";
+  }
+  try {
+    const data = await api("/api/profile-candidates/generate", {
+      method: "POST",
+      body: JSON.stringify({ user_id: state.profile, limit: 16 }),
+    });
+    renderProfileLearning(data.profile_candidates || [], data.profile_memory || []);
+    showToast(data.created ? `已生成 ${data.created} 条画像建议` : "暂无新的画像建议");
+  } finally {
+    const nextButton = $("generateProfileCandidatesBtn");
+    if (nextButton) {
+      nextButton.disabled = false;
+      nextButton.textContent = "生成建议";
+    }
+  }
+}
+
+async function searchKnowledge() {
+  const query = $("knowledgeSearchInput").value.trim();
+  if (!query) {
+    renderKnowledgeSearchResults([], "");
+    return;
+  }
+  $("knowledgeSearchBtn").disabled = true;
+  try {
+    const data = await api(`/api/knowledge/search?user_id=${encodeURIComponent(state.profile)}&q=${encodeURIComponent(query)}&limit=60`);
+    for (const row of data.results || []) {
+      if (row.item) state.itemCache.set(row.item.id, row.item);
+    }
+    renderKnowledgeSearchResults(data.results || [], query);
+  } finally {
+    $("knowledgeSearchBtn").disabled = false;
+  }
+}
+
 async function compileWiki() {
   const button = $("compileWikiBtn");
   if (!button) return;
@@ -1629,6 +1824,62 @@ function showError(error) {
   console.error(error);
   $("crawlerStatus").textContent = "错误";
   showToast(error.message || String(error));
+}
+
+function bindPaneResizers() {
+  if (document.body.dataset.resizersBound === "true") return;
+  document.body.dataset.resizersBound = "true";
+  const savedSidebar = Number(localStorage.getItem("rr.sidebarWidth"));
+  const savedDetail = Number(localStorage.getItem("rr.detailWidth"));
+  if (Number.isFinite(savedSidebar) && savedSidebar > 0) setPaneWidth("--sidebar-w", savedSidebar, 180, 340);
+  if (Number.isFinite(savedDetail) && savedDetail > 0) setPaneWidth("--detail-w", savedDetail, 320, 620);
+  bindPaneResizer("sidebarResizer", {
+    startValue: () => $("navSidebar").getBoundingClientRect().width,
+    nextValue: (start, dx) => start + dx,
+    cssVar: "--sidebar-w",
+    storageKey: "rr.sidebarWidth",
+    min: 180,
+    max: 340,
+  });
+  bindPaneResizer("detailResizer", {
+    startValue: () => $("detailPane").getBoundingClientRect().width,
+    nextValue: (start, dx) => start - dx,
+    cssVar: "--detail-w",
+    storageKey: "rr.detailWidth",
+    min: 320,
+    max: 620,
+  });
+}
+
+function bindPaneResizer(id, config) {
+  const handle = $(id);
+  if (!handle) return;
+  handle.addEventListener("pointerdown", (event) => {
+    if (window.matchMedia("(max-width: 1180px)").matches) return;
+    event.preventDefault();
+    handle.setPointerCapture(event.pointerId);
+    document.body.classList.add("resizing-pane");
+    const startX = event.clientX;
+    const start = config.startValue();
+    const move = (moveEvent) => {
+      const next = config.nextValue(start, moveEvent.clientX - startX);
+      setPaneWidth(config.cssVar, next, config.min, config.max);
+      localStorage.setItem(config.storageKey, String(Math.round(clampNumber(next, config.min, config.max))));
+    };
+    const up = () => {
+      document.body.classList.remove("resizing-pane");
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      handle.removeEventListener("pointercancel", up);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+    handle.addEventListener("pointercancel", up);
+  });
+}
+
+function setPaneWidth(cssVar, value, min, max) {
+  document.documentElement.style.setProperty(cssVar, `${Math.round(clampNumber(value, min, max))}px`);
 }
 
 async function triggerCrawl(days) {
@@ -1699,6 +1950,41 @@ async function askQuestion() {
   }
 }
 
+async function askScopedQuestion(scope) {
+  const isDigest = scope === "digest";
+  const textarea = $(isDigest ? "digestQuestion" : "knowledgeQuestion");
+  const button = $(isDigest ? "digestAskBtn" : "knowledgeAskBtn");
+  const answerBox = $(isDigest ? "digestAnswer" : "knowledgeAnswer");
+  const saveBox = $(isDigest ? "saveDigestNote" : "saveKnowledgeNote");
+  const question = textarea.value.trim();
+  if (!question) return;
+  button.disabled = true;
+  answerBox.classList.remove("hidden");
+  answerBox.textContent = "正在整理上下文并生成回答；如果外部模型较慢，系统会自动降级为本地回答。";
+  try {
+    const digestDate = state.digestDate && state.digestDate !== "__all__" ? state.digestDate : "";
+    const data = await api("/api/chat", {
+      method: "POST",
+      body: JSON.stringify({
+        user_id: state.profile,
+        scope,
+        question,
+        save_note: saveBox.checked,
+        days: scope === "digest" ? Number($("digestDays").value || 7) : 30,
+        item_date: scope === "digest" ? digestDate : "",
+      }),
+    });
+    setMarkdownText(answerBox, data.answer || "后端返回了空回答，请稍后重试。");
+    if (saveBox.checked && state.view === "notes") await loadNotes();
+  } catch (error) {
+    console.error(error);
+    setMarkdownText(answerBox, `这次没有收到后端回答。\n\n错误信息：${error.message || String(error)}`);
+    showToast("提问失败，已把错误写入回答框");
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function saveItemNote() {
   if (!state.selectedItem) {
     showToast("请先选择一条内容");
@@ -1738,7 +2024,14 @@ function bindEvents() {
     state.profile = $("profileSelect").value;
     refreshView().catch(showError);
   });
-  $("digestDays").addEventListener("change", () => loadDigest().catch(showError));
+  $("digestDays").addEventListener("change", () => {
+    state.digestDate = "__all__";
+    loadDigest().catch(showError);
+  });
+  $("digestDate").addEventListener("change", () => {
+    state.digestDate = $("digestDate").value;
+    loadDigest().catch(showError);
+  });
   $("arxivDate").addEventListener("change", () => {
     state.arxivDate = $("arxivDate").value;
     loadArxiv({ reloadDates: false }).catch(showError);
@@ -1761,6 +2054,7 @@ function bindEvents() {
   });
   $("searchBtn").addEventListener("click", () => {
     state.search = $("searchInput").value.trim();
+    state.digestDate = "__all__";
     state.arxivDate = "";
     state.radarDate = "";
     state.blogDate = "";
@@ -1769,6 +2063,7 @@ function bindEvents() {
   $("searchInput").addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
       state.search = $("searchInput").value.trim();
+      state.digestDate = "__all__";
       state.arxivDate = "";
       state.radarDate = "";
       state.blogDate = "";
@@ -1785,8 +2080,15 @@ function bindEvents() {
     button.addEventListener("click", () => sendFeedback(button.dataset.action).catch(showError));
   });
   $("askBtn").addEventListener("click", () => askQuestion().catch(showError));
+  $("digestAskBtn").addEventListener("click", () => askScopedQuestion("digest").catch(showError));
+  $("knowledgeAskBtn").addEventListener("click", () => askScopedQuestion("knowledge").catch(showError));
   $("saveItemNote").addEventListener("click", () => saveItemNote().catch(showError));
   $("compileWikiBtn").addEventListener("click", () => compileWiki().catch(showError));
+  $("knowledgeSearchBtn").addEventListener("click", () => searchKnowledge().catch(showError));
+  $("knowledgeSearchInput").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") searchKnowledge().catch(showError);
+  });
+  bindPaneResizers();
 }
 
 async function init() {

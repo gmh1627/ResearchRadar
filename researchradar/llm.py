@@ -59,6 +59,8 @@ async def answer_question(
     item: dict[str, Any] | None,
     question: str,
     related_items: list[dict[str, Any]],
+    scope: str = "item",
+    context_note: str = "",
 ) -> str:
     cfg = resolve_llm_config(settings)
     if not cfg.api_key:
@@ -68,10 +70,12 @@ async def answer_question(
             question=question,
             related_items=related_items,
             reason="no_key",
+            scope=scope,
+            context_note=context_note,
         )
 
     source_text = await fetch_jina_text(settings, item.get("url")) if item else ""
-    context = build_context(profile, item, related_items, source_text=source_text)
+    context = build_context(profile, item, related_items, source_text=source_text, scope=scope, context_note=context_note)
     messages = [
         {
             "role": "system",
@@ -101,6 +105,8 @@ async def answer_question(
         question=question,
         related_items=related_items,
         reason="llm_unavailable",
+        scope=scope,
+        context_note=context_note,
     )
     return fallback + "\n\n大模型接口刚才不可用，已自动降级为本地回答。最近的调用错误：" + "；".join(errors[:3])
 
@@ -479,13 +485,18 @@ def build_context(
     related_items: list[dict[str, Any]],
     *,
     source_text: str = "",
+    scope: str = "item",
+    context_note: str = "",
 ) -> str:
     parts = [
+        f"Conversation scope: {scope}",
         "User profile:",
         f"- primary_topics: {', '.join(profile.get('primary_topics', []))}",
         f"- secondary_topics: {', '.join(profile.get('secondary_topics', []))}",
         f"- negative_topics: {', '.join(profile.get('negative_topics', []))}",
     ]
+    if context_note:
+        parts.extend(["\nScope context:", context_note])
     if item:
         parts.extend(
             [
@@ -513,6 +524,8 @@ def fallback_answer(
     question: str,
     related_items: list[dict[str, Any]],
     reason: str = "no_key",
+    scope: str = "item",
+    context_note: str = "",
 ) -> str:
     reason_text = {
         "no_key": "当前服务没有读到 OpenAI API key，因此先给你一个本地、基于来源文本的简要回答。",
@@ -520,6 +533,18 @@ def fallback_answer(
         "llm_unavailable": "外部模型接口暂时不可用，因此先给你一个本地、基于来源文本的简要回答。",
     }.get(reason, "当前先给你一个本地、基于来源文本的简要回答。")
     if not item:
+        if scope in {"digest", "knowledge"}:
+            related = "\n".join(f"- {row.get('title')} ({row.get('source_name')})" for row in related_items[:8])
+            related = related or "- 暂无可用条目"
+            context = f"\n\n**当前上下文**：{context_note[:900]}" if context_note else ""
+            return f"""{reason_text}
+
+**问题**：{question}{context}
+
+**可用条目**：
+{related}
+
+当前是本地降级回答，只能依据页面已有摘要、收藏、笔记和问答记录给出粗略判断。完整模型可用后，适合追问“今天应该深读哪几篇”“最近某个方向有什么变化”“哪些内容证据较弱”这类综合问题。"""
         return f"{reason_text}\n\n当前没有绑定具体条目。你可以先在列表里打开一条论文或博客，再基于该条目提问。"
     tags = "、".join(item.get("tags", [])) or "暂无系统标签"
     topics = "、".join(profile.get("primary_topics", [])[:5])

@@ -67,6 +67,7 @@ def score_item(
     secondary = profile.get("secondary_topics", [])
     negative = profile.get("negative_topics", [])
     preferred = set(profile.get("preferred_sources", []))
+    deprioritized = set(profile.get("deprioritized_sources", []))
     if llm_filtered_non_ai(item):
         parts = {
             "relevance": 0.0,
@@ -96,6 +97,8 @@ def score_item(
     authority = SOURCE_AUTHORITY.get(item.get("source_id"), 0.6)
     if item.get("source_id") in preferred:
         authority += 0.08
+    if item.get("source_id") in deprioritized:
+        authority -= 0.12
     source_tier = item.get("source_tier") or item.get("metadata", {}).get("source_tier")
     authority += SOURCE_TIER_BONUS.get(str(source_tier or ""), 0.0)
     authority = clamp(authority)
@@ -160,6 +163,8 @@ def score_item_from_llm_dimensions(
     authority = SOURCE_AUTHORITY.get(item.get("source_id"), 0.6)
     if item.get("source_id") in preferred:
         authority += 0.08
+    if item.get("source_id") in set(profile.get("deprioritized_sources", [])):
+        authority -= 0.12
     source_tier = item.get("source_tier") or item.get("metadata", {}).get("source_tier")
     authority += SOURCE_TIER_BONUS.get(str(source_tier or ""), 0.0)
     authority = clamp(authority)

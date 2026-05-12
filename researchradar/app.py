@@ -3,6 +3,9 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import date as dt_date, datetime, timedelta, timezone
+import hashlib
+import json
+import os
 from pathlib import Path
 import re
 from typing import Any
@@ -67,9 +70,70 @@ HIDDEN_DISPLAY_TAGS = {"rag"}
 async def lifespan(app: FastAPI):
     db.initialize()
     db.mark_interrupted_crawl_days()
-    asyncio.create_task(crawler.scheduler_loop())
-    asyncio.create_task(crawler.catch_up())
+    scheduler_tasks = start_background_crawl_tasks()
     yield
+    for task in scheduler_tasks:
+        task.cancel()
+    if scheduler_tasks:
+        await asyncio.gather(*scheduler_tasks, return_exceptions=True)
+
+
+def start_background_crawl_tasks() -> list[asyncio.Task]:
+    crawl_settings = config.settings.get("crawl", {})
+    if not crawl_settings.get("scheduler_enabled", True):
+        return []
+    lock_path = ROOT / "data" / "scheduler.lock"
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(os.getpid()).encode("utf-8"))
+        os.close(fd)
+    except FileExistsError:
+        if scheduler_lock_is_stale(lock_path):
+            try:
+                lock_path.unlink()
+                fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.write(fd, str(os.getpid()).encode("utf-8"))
+                os.close(fd)
+            except OSError:
+                return []
+        else:
+            return []
+    except OSError:
+        return []
+
+    async def release_lock_when_done(tasks: list[asyncio.Task]) -> None:
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            release_scheduler_lock(lock_path)
+
+    scheduler = asyncio.create_task(crawler.scheduler_loop())
+    catchup = asyncio.create_task(crawler.catch_up())
+    guard = asyncio.create_task(release_lock_when_done([scheduler, catchup]))
+    return [scheduler, catchup, guard]
+
+
+def scheduler_lock_is_stale(path: Path) -> bool:
+    try:
+        pid_text = path.read_text(encoding="utf-8").strip()
+        pid = int(pid_text)
+    except (OSError, ValueError):
+        return True
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return True
+    return False
+
+
+def release_scheduler_lock(path: Path) -> None:
+    try:
+        pid_text = path.read_text(encoding="utf-8").strip()
+        if pid_text == str(os.getpid()):
+            path.unlink()
+    except OSError:
+        pass
 
 
 app = FastAPI(title="ResearchRadar", version="0.1.0", lifespan=lifespan)
@@ -93,6 +157,8 @@ class ChatRequest(BaseModel):
     item_id: str | None = None
     question: str
     save_note: bool = False
+    days: int = 7
+    item_date: str = ""
 
 
 class NoteRequest(BaseModel):
@@ -112,6 +178,16 @@ class WikiCompileRequest(BaseModel):
 class WebSearchRequest(BaseModel):
     query: str
     num: int = 8
+
+
+class ProfileCandidateDecisionRequest(BaseModel):
+    user_id: str = "default"
+    decision: str
+
+
+class ProfileCandidateGenerateRequest(BaseModel):
+    user_id: str = "default"
+    limit: int = 12
 
 
 @app.get("/")
@@ -223,13 +299,23 @@ async def item_detail(item_id: str, user_id: str = "default"):
 
 
 @app.get("/api/digest")
-async def digest(user_id: str = "default", days: int = 7, limit: int | None = None):
+async def digest(
+    user_id: str = "default",
+    days: int = 7,
+    limit: int | None = None,
+    item_date: str = Query("", alias="date"),
+):
     profile = find_profile(user_id)
     if not profile:
         raise HTTPException(status_code=404, detail="profile not found")
+    memory = db.list_profile_memory(user_id)
+    profile = effective_profile(profile, memory)
+    profile_version = profile_cache_version(profile, memory)
+    if item_date:
+        validate_item_date(item_date)
     max_items = max(1, min(limit or config.digest_item_count, 120))
     run_date = datetime.now(ZoneInfo(config.timezone)).date().isoformat()
-    existing_run = db.get_digest_run(user_id, run_date, days, max_items)
+    existing_run = None if item_date else db.get_digest_run(user_id, run_date, days, max_items, profile_version)
     if existing_run:
         existing_rows = existing_run["items"]
         existing_items = [with_display_summary(row) for row in existing_rows]
@@ -241,12 +327,15 @@ async def digest(user_id: str = "default", days: int = 7, limit: int | None = No
             "limit": max_items,
             "candidate_count": int(existing_run["meta"].get("candidate_count") or 0),
             "generated_at": existing_run["meta"]["created_at"],
+            "date": "",
+            "scope_label": f"近 {days} 天",
+            "profile_version": profile_version,
         }
-    rows, _ = db.query_items(days=days, limit=max(500, max_items * 12))
+    rows, _ = db.query_items(item_date=item_date, days=days, limit=max(500, max_items * 12))
     ranked = rank_items(rows, profile, db.feedback_for_user(user_id), db.feedback_signals_for_user(user_id))
     db.update_item_scores(ranked)
     min_per_section = int(config.settings.get("ranking", {}).get("digest_min_items_per_section", 4))
-    sent_fingerprints = db.sent_digest_fingerprints(user_id)
+    sent_fingerprints = set() if item_date else db.sent_digest_fingerprints(user_id)
     selected = select_digest_items(
         ranked,
         max_items=max_items,
@@ -254,17 +343,19 @@ async def digest(user_id: str = "default", days: int = 7, limit: int | None = No
         excluded_fingerprints=sent_fingerprints,
     )
     selected = [with_display_summary(row) for row in selected]
-    db.create_digest_run(
-        user_id=user_id,
-        run_date=run_date,
-        days=days,
-        item_limit=max_items,
-        candidate_count=len(rows),
-        entries=[
-            {"item_id": item["id"], "fingerprint": digest_item_fingerprint(item)}
-            for item in selected
-        ],
-    )
+    if not item_date:
+        db.create_digest_run(
+            user_id=user_id,
+            run_date=run_date,
+            days=days,
+            item_limit=max_items,
+            profile_version=profile_version,
+            candidate_count=len(rows),
+            entries=[
+                {"item_id": item["id"], "fingerprint": digest_item_fingerprint(item)}
+                for item in selected
+            ],
+        )
     sections = build_digest_sections(selected)
     return {
         "profile": profile,
@@ -273,6 +364,9 @@ async def digest(user_id: str = "default", days: int = 7, limit: int | None = No
         "limit": max_items,
         "candidate_count": len(rows),
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "date": item_date,
+        "scope_label": item_date or f"近 {days} 天",
+        "profile_version": profile_version,
     }
 
 
@@ -314,16 +408,55 @@ async def list_conversations(user_id: str = "default", limit: int = 80):
 @app.get("/api/knowledge")
 async def knowledge(user_id: str = "default"):
     profile = find_profile(user_id)
-    stats = filter_knowledge_stats(db.knowledge_stats(user_id), profile)
+    memory = db.list_profile_memory(user_id)
+    effective = effective_profile(profile, memory)
+    stats = filter_knowledge_stats(db.knowledge_stats(user_id), effective)
     saved_items = [with_display_summary(row) for row in db.list_feedback_items(user_id, ["save", "deep_read"], limit=80)]
     return {
-        "profile": profile,
+        "profile": effective,
         "stats": stats,
         "items": saved_items,
         "notes": db.list_notes(user_id),
         "conversations": db.list_conversations(user_id, limit=60),
         "wiki_pages": db.list_wiki_pages(user_id),
         "wiki_log": db.list_wiki_log(user_id, limit=20),
+        "profile_candidates": db.list_profile_update_candidates(user_id, statuses=("pending",)),
+        "profile_memory": memory,
+    }
+
+
+@app.get("/api/knowledge/search")
+async def knowledge_search(user_id: str = "default", q: str = "", limit: int = 60):
+    rows = db.search_knowledge(user_id=user_id, q=q, limit=max(1, min(limit, 120)))
+    for row in rows:
+        if row.get("item"):
+            row["item"] = with_display_summary(row["item"])
+    return {"results": rows}
+
+
+@app.post("/api/profile-candidates/generate")
+async def generate_profile_candidates(req: ProfileCandidateGenerateRequest):
+    created = db.generate_profile_update_candidates(req.user_id, limit=max(1, min(req.limit, 40)))
+    return {
+        "ok": True,
+        "created": created,
+        "profile_candidates": db.list_profile_update_candidates(req.user_id, statuses=("pending",)),
+        "profile_memory": db.list_profile_memory(req.user_id),
+    }
+
+
+@app.post("/api/profile-candidates/{candidate_id}")
+async def decide_profile_candidate(candidate_id: str, req: ProfileCandidateDecisionRequest):
+    if req.decision not in {"accept", "reject"}:
+        raise HTTPException(status_code=400, detail="decision must be accept or reject")
+    candidate = db.decide_profile_candidate(req.user_id, candidate_id, req.decision)
+    if not candidate:
+        raise HTTPException(status_code=404, detail="candidate not found")
+    return {
+        "ok": True,
+        "candidate": candidate,
+        "profile_candidates": db.list_profile_update_candidates(req.user_id, statuses=("pending",)),
+        "profile_memory": db.list_profile_memory(req.user_id),
     }
 
 
@@ -336,6 +469,8 @@ async def knowledge_graph(user_id: str = "default", limit: int = 80):
 @app.post("/api/knowledge/compile")
 async def compile_knowledge(req: WikiCompileRequest):
     profile = find_profile(req.user_id)
+    memory = db.list_profile_memory(req.user_id)
+    profile = effective_profile(profile, memory)
     items = [with_display_summary(row) for row in db.knowledge_graph_items(req.user_id, limit=max(20, min(req.limit, 160)))]
     notes = db.list_notes(req.user_id)
     conversations = db.list_conversations(req.user_id, limit=40)
@@ -386,8 +521,12 @@ async def chat(req: ChatRequest):
     profile = find_profile(req.user_id)
     if not profile:
         raise HTTPException(status_code=404, detail="profile not found")
+    profile = effective_profile(profile, db.list_profile_memory(req.user_id))
     item = db.get_item(req.item_id) if req.item_id else None
-    related, _ = db.query_items(days=21, q=" ".join((item or {}).get("tags", [])[:2]), limit=8)
+    scope = req.scope if req.scope in {"item", "digest", "knowledge"} else "item"
+    if req.item_date:
+        validate_item_date(req.item_date)
+    related, context_note = chat_context(req.user_id, profile, item, scope=scope, days=req.days, item_date=req.item_date)
     chat_timeout = float(config.settings.get("llm", {}).get("chat_timeout_seconds", 30))
     try:
         answer = await asyncio.wait_for(
@@ -397,12 +536,22 @@ async def chat(req: ChatRequest):
                 item=item,
                 question=req.question,
                 related_items=related,
+                scope=scope,
+                context_note=context_note,
             ),
             timeout=max(8, chat_timeout),
         )
     except asyncio.TimeoutError:
         answer = (
-            fallback_answer(profile=profile, item=item, question=req.question, related_items=related, reason="timeout")
+            fallback_answer(
+                profile=profile,
+                item=item,
+                question=req.question,
+                related_items=related,
+                reason="timeout",
+                scope=scope,
+                context_note=context_note,
+            )
             + "\n\n外部模型或原文读取超过了本次等待上限，已先返回本地降级回答。你可以稍后重试获取更完整的大模型分析。"
         )
     except Exception as exc:
@@ -414,7 +563,7 @@ async def chat(req: ChatRequest):
     conv = {
         "id": stable_id(req.user_id, req.item_id or "", req.question, datetime.now(timezone.utc).isoformat()),
         "user_id": req.user_id,
-        "scope": req.scope,
+        "scope": scope,
         "item_id": req.item_id,
         "question": req.question,
         "answer": answer,
@@ -422,16 +571,25 @@ async def chat(req: ChatRequest):
     }
     db.add_conversation(conv)
     if req.save_note:
-        title = f"知识笔记：{(item or {}).get('title', req.question)[:80]}"
+        note = distilled_chat_note(
+            user_id=req.user_id,
+            item=item,
+            scope=scope,
+            question=req.question,
+            answer=answer,
+            related_items=related,
+            context_note=context_note,
+            conversation_id=conv["id"],
+        )
         db.add_note(
             {
-                "id": stable_id(req.user_id, title, conv["id"]),
-                "user_id": req.user_id,
-                "item_id": req.item_id,
-                "title": title,
-                "content": answer,
-                "tags_json": encode_json((item or {}).get("tags", [])),
-                "importance": 3,
+                "id": note["id"],
+                "user_id": note["user_id"],
+                "item_id": note["item_id"],
+                "title": note["title"],
+                "content": note["content"],
+                "tags_json": encode_json(note["tags"]),
+                "importance": note["importance"],
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
         )
@@ -449,6 +607,245 @@ def find_profile(user_id: str) -> dict[str, Any] | None:
         if profile.get("user_id") == user_id:
             return profile
     return config.profiles[0] if config.profiles and user_id == "default" else None
+
+
+def chat_context(
+    user_id: str,
+    profile: dict[str, Any],
+    item: dict[str, Any] | None,
+    *,
+    scope: str,
+    days: int,
+    item_date: str = "",
+) -> tuple[list[dict[str, Any]], str]:
+    if scope == "digest":
+        profile = effective_profile(profile, db.list_profile_memory(user_id))
+        rows, _ = db.query_items(item_date=item_date, days=max(1, min(days, 60)), limit=420)
+        ranked = rank_items(rows, profile, db.feedback_for_user(user_id), db.feedback_signals_for_user(user_id))
+        selected = select_digest_items(
+            ranked,
+            max_items=min(config.digest_item_count, 36),
+            min_per_section=int(config.settings.get("ranking", {}).get("digest_min_items_per_section", 4)),
+            excluded_fingerprints=set(),
+        )
+        selected = [with_display_summary(row) for row in selected]
+        sections = build_digest_sections(selected)
+        return selected[:18], digest_context_text(sections, selected, days, item_date=item_date)
+
+    if scope == "knowledge":
+        items = [with_display_summary(row) for row in db.knowledge_graph_items(user_id, limit=60)]
+        notes = db.list_notes(user_id)[:20]
+        conversations = db.list_conversations(user_id, limit=20)
+        wiki_pages = db.list_wiki_pages(user_id)[:20]
+        memory = db.list_profile_memory(user_id)
+        return items[:18], knowledge_context_text(items, notes, conversations, wiki_pages, memory)
+
+    related, _ = db.query_items(days=21, q=" ".join((item or {}).get("tags", [])[:2]), limit=8)
+    return related, ""
+
+
+def digest_context_text(
+    sections: list[dict[str, Any]],
+    items: list[dict[str, Any]],
+    days: int,
+    *,
+    item_date: str = "",
+) -> str:
+    lines = [
+        f"Digest window: {item_date if item_date else f'last {days} days'}.",
+        f"Selected items: {len(items)}.",
+    ]
+    for section in sections:
+        lines.append(f"\nSection: {section['label']} ({section['count']})")
+        for item in section["items"][:5]:
+            lines.append(
+                "- "
+                + str(item.get("title") or "Untitled")
+                + f" | score={format_context_score(item.get('score'))}"
+                + f" | source={item.get('source_name')}"
+                + f" | reason={item.get('relevance_reason') or ''}"
+            )
+    return "\n".join(lines)[:9000]
+
+
+def knowledge_context_text(
+    items: list[dict[str, Any]],
+    notes: list[dict[str, Any]],
+    conversations: list[dict[str, Any]],
+    wiki_pages: list[dict[str, Any]],
+    memory: list[dict[str, Any]],
+) -> str:
+    lines = [
+        f"Knowledge items: {len(items)}. Notes: {len(notes)}. Conversations: {len(conversations)}. Wiki pages: {len(wiki_pages)}.",
+    ]
+    if memory:
+        lines.append("\nAccepted profile memory:")
+        for row in memory[:20]:
+            lines.append(f"- {row['memory_key']}: {row['memory_value']} ({format_context_score(row.get('weight'))})")
+    if wiki_pages:
+        lines.append("\nWiki pages:")
+        for page in wiki_pages[:10]:
+            lines.append(f"- {page['title']} [{page['page_type']}]: {page.get('summary') or page.get('content', '')[:180]}")
+    if notes:
+        lines.append("\nRecent notes:")
+        for note in notes[:10]:
+            lines.append(f"- {note['title']}: {str(note.get('content') or '')[:220]}")
+    if conversations:
+        lines.append("\nRecent Q&A:")
+        for conv in conversations[:8]:
+            lines.append(f"- Q: {conv.get('question')} | A: {str(conv.get('answer') or '')[:220]}")
+    if items:
+        lines.append("\nKnowledge-linked items:")
+        for item in items[:14]:
+            lines.append(f"- {item.get('title')} ({item.get('source_name')}): {str(item.get('display_summary') or '')[:220]}")
+    return "\n".join(lines)[:10000]
+
+
+def format_context_score(value: Any) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return ""
+    return str(round(number * 100 if number <= 1 else number))
+
+
+def effective_profile(profile: dict[str, Any], memory_rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    merged = {**(profile or {})}
+    fields = {
+        "interest": "primary_topics",
+        "negative": "negative_topics",
+        "preferred_source": "preferred_sources",
+        "deprioritized_source": "deprioritized_sources",
+    }
+    for row in memory_rows or []:
+        key = fields.get(str(row.get("memory_key") or ""))
+        value = str(row.get("memory_value") or "").strip()
+        if not key or not value:
+            continue
+        values = list(merged.get(key) or [])
+        if value not in values:
+            values.append(value)
+        merged[key] = values
+    return merged
+
+
+def profile_cache_version(profile: dict[str, Any], memory_rows: list[dict[str, Any]] | None = None) -> str:
+    payload = {
+        "user_id": profile.get("user_id"),
+        "primary_topics": profile.get("primary_topics", []),
+        "secondary_topics": profile.get("secondary_topics", []),
+        "negative_topics": profile.get("negative_topics", []),
+        "preferred_sources": profile.get("preferred_sources", []),
+        "deprioritized_sources": profile.get("deprioritized_sources", []),
+        "memory": [
+            {
+                "key": row.get("memory_key"),
+                "value": row.get("memory_value"),
+                "weight": round(float(row.get("weight") or 0), 4),
+                "created_at": row.get("created_at"),
+            }
+            for row in (memory_rows or [])
+        ],
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def distilled_chat_note(
+    *,
+    user_id: str,
+    item: dict[str, Any] | None,
+    scope: str,
+    question: str,
+    answer: str,
+    related_items: list[dict[str, Any]],
+    context_note: str,
+    conversation_id: str,
+) -> dict[str, Any]:
+    source_title = (item or {}).get("title") or scope_note_source_title(scope)
+    tags = note_tags_for_chat(scope, item, related_items)
+    title = f"{scope_note_prefix(scope)}：{truncate_plain(question or source_title, 64)}"
+    item_lines = []
+    if item:
+        item_lines.append(f"- `{item.get('id')}` {item.get('title')} ({item.get('source_name')})")
+    for row in related_items[:8]:
+        item_lines.append(f"- `{row.get('id')}` {row.get('title')} ({row.get('source_name')})")
+    context_excerpt = truncate_plain(context_note, 900)
+    answer_excerpt = truncate_answer_for_note(answer)
+    content_parts = [
+        "# 蒸馏笔记",
+        "",
+        f"## 问题",
+        "",
+        question.strip(),
+        "",
+        "## 结论摘要",
+        "",
+        answer_excerpt,
+    ]
+    if item_lines:
+        content_parts.extend(["", "## 相关来源", "", *dedupe_preserve_order(item_lines)[:10]])
+    if context_excerpt:
+        content_parts.extend(["", "## 上下文摘录", "", context_excerpt])
+    content_parts.extend(["", "## 追溯", "", f"- scope: `{scope}`", f"- conversation: `{conversation_id}`"])
+    return {
+        "id": stable_id(user_id, scope, question, conversation_id),
+        "user_id": user_id,
+        "item_id": (item or {}).get("id") if scope == "item" else None,
+        "title": title,
+        "content": "\n".join(content_parts).strip(),
+        "tags": tags,
+        "importance": 4 if scope in {"digest", "knowledge"} else 3,
+    }
+
+
+def truncate_answer_for_note(answer: str, limit: int = 1400) -> str:
+    text = answer.strip()
+    lines = [line.rstrip() for line in text.splitlines()]
+    useful = []
+    for line in lines:
+        if line.strip().startswith("如果你希望每次都拿到完整的大模型回答"):
+            break
+        useful.append(line)
+    text = "\n".join(useful).strip() or answer.strip()
+    return truncate_plain(text, limit)
+
+
+def note_tags_for_chat(scope: str, item: dict[str, Any] | None, related_items: list[dict[str, Any]]) -> list[str]:
+    tags = [f"scope:{scope}", "chat-note"]
+    if item:
+        tags.extend(item.get("tags", [])[:8])
+    if scope in {"digest", "knowledge"}:
+        for row in related_items[:8]:
+            tags.extend(row.get("tags", [])[:4])
+    return dedupe_preserve_order(str(tag) for tag in tags if str(tag).strip())[:14]
+
+
+def scope_note_prefix(scope: str) -> str:
+    return {"digest": "日报追问", "knowledge": "知识库追问"}.get(scope, "条目追问")
+
+
+def scope_note_source_title(scope: str) -> str:
+    return {"digest": "当前日报", "knowledge": "知识库"}.get(scope, "条目")
+
+
+def truncate_plain(value: Any, limit: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(1, limit - 1)].rstrip() + "..."
+
+
+def dedupe_preserve_order(values) -> list[str]:
+    out = []
+    seen = set()
+    for value in values:
+        text = str(value).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    return out
 
 
 def build_digest_sections(items: list[dict[str, Any]]) -> list[dict[str, Any]]:

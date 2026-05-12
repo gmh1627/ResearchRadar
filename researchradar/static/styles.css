@@ -102,6 +102,7 @@ textarea { resize: vertical; }
   display: grid;
   grid-template-columns: var(--sidebar-w) minmax(0,1fr) var(--detail-w);
   height: 100vh; min-height: 0; overflow: hidden;
+  position: relative;
 }
 
 /* ── Sidebar ────────────────────────────────── */
@@ -244,6 +245,8 @@ textarea { resize: vertical; }
 }
 .section-head p { margin: 4px 0 0; color: var(--muted); font-size: 12.5px; }
 .section-head > div { min-width: 0; }
+.section-head > select { width: auto; min-width: 130px; }
+#digestDays, #digestDate { max-width: 190px; }
 
 /* ── Date / filter controls ───────────────────── */
 .date-controls { display: grid; grid-template-columns: minmax(170px,220px); gap: 5px; justify-items: stretch; }
@@ -468,6 +471,85 @@ textarea { resize: vertical; }
   border-radius: var(--r); padding: 12px 14px; font-size: 13.5px;
 }
 
+/* ── Page-level chat ─────────────────────────── */
+.page-chat {
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg);
+  padding: 14px; margin-bottom: 16px; box-shadow: var(--sh-xs);
+}
+.page-chat-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 9px;
+}
+.page-chat-head h3 { font-size: 15px; font-weight: 750; color: var(--ink); }
+.page-chat textarea { min-height: 78px; font-size: 13px; line-height: 1.5; }
+.page-chat-actions {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px;
+}
+.page-chat-actions .checkbox { margin: 0; }
+
+/* ── Knowledge search / learning ─────────────── */
+.knowledge-search {
+  display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px;
+  margin-bottom: 12px;
+}
+.knowledge-results {
+  display: grid; gap: 8px; margin-bottom: 16px;
+  border: 1px solid var(--line); border-radius: var(--r-lg);
+  background: #fafaf9; padding: 10px;
+}
+.knowledge-result {
+  background: #fff; border: 1px solid var(--line); border-radius: var(--r);
+  padding: 11px 13px; cursor: pointer; box-shadow: var(--sh-xs);
+  transition: border-color var(--t), box-shadow var(--t);
+}
+.knowledge-result:hover { border-color: var(--accent); box-shadow: var(--sh-sm); }
+.knowledge-result h3 { font-size: 13.5px; line-height: 1.36; margin-bottom: 5px; }
+.knowledge-result p { margin: 0; color: var(--ink-2); font-size: 12.5px; line-height: 1.48; }
+
+.profile-learning {
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg);
+  padding: 14px; margin-bottom: 14px; box-shadow: var(--sh-xs);
+}
+.profile-memory {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  padding: 10px; border: 1px solid var(--line); border-radius: var(--r);
+  background: #fafaf9; margin-bottom: 10px;
+}
+.profile-candidates { display: grid; gap: 8px; }
+.profile-learning-actions {
+  display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; flex: 1;
+}
+.profile-learning-actions .profile-title {
+  max-width: min(58vw,520px);
+}
+.profile-learning-actions button {
+  flex: 0 0 auto; padding: 6px 10px; font-size: 12px;
+}
+.profile-candidate {
+  display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 10px; align-items: center;
+  background: #fff; border: 1px solid var(--line); border-radius: var(--r);
+  padding: 11px 12px; box-shadow: var(--sh-xs);
+}
+.profile-candidate h4 { font-size: 13.5px; margin-bottom: 3px; color: var(--ink); }
+.profile-candidate p { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.45; }
+.candidate-actions { display: flex; gap: 6px; }
+
+/* ── Resizable panes ─────────────────────────── */
+.pane-resizer {
+  position: absolute; top: 0; bottom: 0; width: 9px; z-index: 60;
+  cursor: col-resize; background: transparent;
+}
+.pane-resizer::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 4px; width: 1px;
+  background: transparent; transition: background var(--t), box-shadow var(--t);
+}
+.pane-resizer:hover::after,
+.resizing-pane .pane-resizer::after {
+  background: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring);
+}
+.sidebar-resizer { left: calc(var(--sidebar-w) - 4px); }
+.detail-resizer { right: calc(var(--detail-w) - 5px); }
+.resizing-pane { cursor: col-resize; user-select: none; }
+
 /* ── Toast ───────────────────────────────────── */
 .toast {
   position: fixed; right: 20px; bottom: 20px; z-index: 100;
@@ -657,6 +739,7 @@ textarea { resize: vertical; }
 @media (max-width: 1180px) {
   .app { grid-template-columns: var(--sidebar-w) minmax(0,1fr); }
   .detail { grid-column: 1 / -1; max-height: 44vh; border-left: 0; border-top: 1px solid var(--line); }
+  .pane-resizer { display: none; }
 }
 @media (max-width: 760px) {
   html, body { height: auto; }
@@ -674,6 +757,10 @@ textarea { resize: vertical; }
   .source-row { grid-template-columns: 1fr; }
   .evidence-grid { grid-template-columns: 1fr; }
   .knowledge-stats, .knowledge-columns, .profile-grid, .profile-fields, .note-row, .wiki-layout { grid-template-columns: 1fr; }
+  .knowledge-search, .profile-candidate, .page-chat-actions { grid-template-columns: 1fr; flex-direction: column; align-items: stretch; }
+  .candidate-actions { justify-content: flex-start; }
   .profile-head { display: block; }
   .profile-title { display: block; max-width: 100%; margin-top: 4px; text-align: left; }
+  .profile-learning-actions { align-items: stretch; justify-content: flex-start; flex-direction: column; margin-top: 6px; }
+  .profile-learning-actions .profile-title { max-width: 100%; }
 }

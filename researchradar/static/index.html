@@ -111,6 +111,22 @@
               <option value="14">近 14 天</option>
               <option value="30">近 30 天</option>
             </select>
+            <select id="digestDate"></select>
+          </div>
+          <div class="page-chat">
+            <div class="page-chat-head">
+              <h3>日报追问</h3>
+              <span class="muted">围绕当前时间窗口的精选条目提问</span>
+            </div>
+            <textarea id="digestQuestion" rows="3" placeholder="例如：今天最值得深读哪几篇？哪些只是早期信号？"></textarea>
+            <div class="page-chat-actions">
+              <label class="checkbox">
+                <input type="checkbox" id="saveDigestNote" />
+                <span>保存回答为知识笔记</span>
+              </label>
+              <button id="digestAskBtn">提问</button>
+            </div>
+            <div id="digestAnswer" class="answer rich-text markdown-body hidden"></div>
           </div>
           <div id="digestList" class="item-list"></div>
         </section>
@@ -195,6 +211,27 @@
           </div>
           <div id="knowledgeStats" class="knowledge-stats"></div>
           <div id="knowledgeProfile" class="knowledge-profile"></div>
+          <div id="profileLearning" class="profile-learning"></div>
+          <div class="knowledge-search">
+            <input id="knowledgeSearchInput" placeholder="搜索收藏、笔记、问答和 wiki（支持 FTS）" />
+            <button id="knowledgeSearchBtn">搜索</button>
+          </div>
+          <div id="knowledgeSearchResults" class="knowledge-results hidden"></div>
+          <div class="page-chat">
+            <div class="page-chat-head">
+              <h3>知识库追问</h3>
+              <span class="muted">基于收藏、笔记、问答和 wiki 综合回答</span>
+            </div>
+            <textarea id="knowledgeQuestion" rows="3" placeholder="例如：最近两周 agent memory 有哪些线索？我下一步该读什么？"></textarea>
+            <div class="page-chat-actions">
+              <label class="checkbox">
+                <input type="checkbox" id="saveKnowledgeNote" />
+                <span>保存回答为知识笔记</span>
+              </label>
+              <button id="knowledgeAskBtn">提问</button>
+            </div>
+            <div id="knowledgeAnswer" class="answer rich-text markdown-body hidden"></div>
+          </div>
           <div class="wiki-workbench">
             <div class="subhead wiki-head">
               <div>
@@ -270,6 +307,7 @@
             <button data-action="save" class="feedback">收藏</button>
             <button data-action="deep_read" class="feedback">深读</button>
             <button data-action="ignore" class="feedback ghost">忽略</button>
+            <button data-action="not_relevant" class="feedback ghost">不相关</button>
           </div>
           <div class="chat">
             <h3>研究追问</h3>
@@ -298,6 +336,8 @@
           </div>
         </div>
       </aside>
+      <div id="sidebarResizer" class="pane-resizer sidebar-resizer" aria-hidden="true"></div>
+      <div id="detailResizer" class="pane-resizer detail-resizer" aria-hidden="true"></div>
     </div>
     <div id="toast" class="toast hidden"></div>
 
